@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -123,6 +124,48 @@ func (f *Forecast) bestArea(latitude, longitude float32) (*bestDataset, error) {
 		dataset.Location{Lat: selectedLocation.Lat, Long: selectedLocation.Long}}, nil
 }
 
+// SetConfig puts a new configuration into use.
+//
+// Areas that are no longer listed are dropped and their readers closed. update
+// only ever adds, so without this a removed area would go on being served from
+// memory until the process restarted. Newly listed areas need nothing here:
+// the next poll finds them, three seconds away.
+//
+// Everything else in the configuration is read when an area is downloaded, or
+// not again at all — see config.ColdChanges, which is what tells the operator
+// so rather than leaving them to wonder why nothing happened.
+func (f *Forecast) SetConfig(cfg *config.Configuration) {
+	wanted := make(map[string]bool, len(cfg.Areas))
+	for _, area := range cfg.Areas {
+		wanted[area] = true
+	}
+
+	f.m.Lock()
+	f.cfg = cfg
+
+	var dropped []*dataset.Dataset
+	for area, ds := range f.datasets {
+		if wanted[area] {
+			continue
+		}
+		delete(f.datasets, area)
+		dropped = append(dropped, ds)
+		log.Printf("dropped: %s", area)
+		forgetArea(area)
+	}
+	f.m.Unlock()
+
+	// Closed after the lock is released. A dataset is only reachable through
+	// the map, and taking the write lock waited out every request already
+	// reading one, so nothing can be using these — and freeing their memory
+	// should not hold up the requests waiting to start.
+	for _, ds := range dropped {
+		if err := ds.Close(); err != nil {
+			log.Printf("closing dropped dataset: %s", err)
+		}
+	}
+}
+
 func (f *Forecast) run() {
 	for {
 		time.Sleep(3 * time.Second)
@@ -143,9 +186,13 @@ func (f *Forecast) update() error {
 		return err
 	}
 
+	// One snapshot for the whole round, threaded down rather than read again
+	// inside load: the configuration can be replaced at any moment, and a
+	// download that read it twice could use two different loaders.
 	f.m.RLock()
+	cfg := f.cfg
 	toAdd := make(map[string]int)
-	for _, area := range f.cfg.Areas {
+	for _, area := range cfg.Areas {
 		latestVersion := latest[area]
 		current, ok := f.datasets[area]
 		if !ok || current.Meta.Version < latestVersion {
@@ -159,7 +206,7 @@ func (f *Forecast) update() error {
 		go func(area string, version int) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			errs <- f.load(ctx, area, version)
+			errs <- f.load(ctx, cfg, area, version)
 		}(area, version)
 	}
 	hasLoadErrors := false
@@ -176,7 +223,7 @@ func (f *Forecast) update() error {
 	return nil
 }
 
-func (f *Forecast) load(ctx context.Context, area string, version int) error {
+func (f *Forecast) load(ctx context.Context, cfg *config.Configuration, area string, version int) error {
 	log.Printf("available: %s/%d", area, version)
 
 	prometheusLabel := prometheus.Labels{"area": area}
@@ -189,12 +236,24 @@ func (f *Forecast) load(ctx context.Context, area string, version int) error {
 		return err
 	}
 
-	ds, err := dataset.Download(ctx, f.store, meta, f.cfg)
+	ds, err := dataset.Download(ctx, f.store, meta, cfg)
 	if err != nil {
 		return err
 	}
 
 	f.m.Lock()
+	// The configuration may have been replaced while this was downloading. An
+	// area dropped in the meantime must not come back, or removing one from
+	// the config manager would look like it had worked and then undo itself.
+	if !slices.Contains(f.cfg.Areas, area) {
+		f.m.Unlock()
+		ds.Close()
+		// The available gauges were set above, before the download. Nothing
+		// should still be reporting a version for an area that was dropped.
+		forgetArea(area)
+		log.Printf("discarding %s/%d: no longer configured", area, version)
+		return nil
+	}
 	if old, ok := f.datasets[area]; ok {
 		old.Close()
 	}

@@ -1,7 +1,7 @@
 # forti-control: Config Manager Design
 
-Status: **agreed**. Slice 1 (jsonfrontend worker side) and slice 2a
-(`forti-control` MVP) **implemented**.
+Status: **agreed**. Slice 1 (jsonfrontend worker side), slice 2a
+(`forti-control` MVP) and slice 3 (rawdataforecaster) **implemented**.
 Date: 2026-09-08
 
 A web UI for managing forti's config files, with in-place reload — modelled on
@@ -174,7 +174,7 @@ existing `expires(current, maxOffset)` precedent at `server.go:202`.
 Add a setter guarded by the existing mutex; the next probe picks it up within
 60s. `probeHistory` may need trimming if `probe_history.size` shrinks.
 
-### rawdataforecaster — moderate, and partly cold
+### rawdataforecaster — moderate, and partly cold — DONE
 
 Config is read in `main.go`, passed to `server.Run` → `forecast.New` → captured
 as `Forecast.cfg`. Reloading means swapping that field under the existing
@@ -182,22 +182,23 @@ as `Forecast.cfg`. Reloading means swapping that field under the existing
 
 | field | tier | why |
 |---|---|---|
-| `areas` (add) | **hot, free** | the existing 3s poll loop (`forecast.go:129`) picks up new areas once `cfg` is swapped — zero new code |
+| `areas` (add) | **hot, free** | the existing 3s poll loop picks up new areas once `cfg` is swapped — zero new code |
 | `areas` (remove) | ~10 lines | `update()` never deletes dropped areas; needs a delete + `Close()` |
-| `maximum_gridpoint_distance` | cold as written | baked into every `Dataset.GridLimit` at download (`dataset.go:93`), though the check runs at `forecast.go:116` where live config is in reach — cheap to lift |
-| `loader.type` / `.configuration` | cold | consumed per-download (`dataset.go:56`) |
-| `source.bucket` | coldest | consumed by `internalformat.NewClient` in `New()` (`forecast.go:31`) |
+| `maximum_gridpoint_distance` | cold | baked into every `Dataset.GridLimit` at download |
+| `loader.type` / `.configuration` | cold | consumed per-download |
+| `source.bucket` | coldest | consumed by `internalformat.NewClient` in `New()` |
 
-**Prerequisite — remove the panics.** `configuration.go:31` panics on an
-unknown `loader.type`; `dataset.go:49` does an unchecked
-`maxSizes.(map[string]interface{})` and `:112` an unchecked `maxGiB.(float64)`.
-Today those are startup crashes with an operator watching. Under reload, a panic
-in the watch path **kills a healthy serving process because someone typo'd a web
-form.** Checked assertions and a total validator are non-negotiable here.
+**Prerequisite — remove the panics.** An unknown `loader.type` panicked, and
+`max_size_gib` was read through two unchecked type assertions. Those were
+startup crashes with an operator watching. Under reload, a panic in the watch
+path **kills a healthy serving process because someone typo'd a web form.**
+Checked assertions and a total validator were non-negotiable here.
 
-(Related: the README documents `max_size_gib` as a number, but the code requires
-an object keyed by area — which is what `nowcast.json` actually ships. Following
-the README panics the process.)
+(Related: the README documented `max_size_gib` as a number, but the code
+requires an object keyed by area — which is what `nowcast.json` actually ships.
+Following the README panicked the process.)
+
+Done in slice 3; see below for what landed.
 
 ### correctedforecaster — not managed
 
@@ -269,9 +270,8 @@ The generated forms and merge-don't-regenerate semantics are 2b, still to do.
 
 ## 6. Remaining slices
 
-Suggested order: **2a -> 3 -> 2b -> 4.** Landing `rawdataforecaster` before the
-forms means `pending_restart` is real by the time there is a UI for it, and the
-panic fixes are worth having regardless of this project.
+Suggested order: **2a -> 3 -> 2b -> 4.** 2a and 3 are done, so `pending_restart`
+is now real before there is a UI for it. **2b is next.**
 
 ### Slice 2 — forti-control MVP
 
@@ -290,37 +290,86 @@ Forces three of the four open questions: audit log storage, whether
 restore-from-snapshot is one click, and whether `USER nobody` can write
 `/status` on the real mounts.
 
-**Sequencing wrinkle:** the restart-required badge cannot be tested until slice
-3. `jsonfrontend` has no cold fields, so nothing populates `pending_restart`
-yet. Either build the badge blind, or defer it to slice 3.
+**Sequencing wrinkle — resolved.** The restart-required badge could not be
+tested until slice 3, because `jsonfrontend` has no cold fields and nothing
+populated `pending_restart`. It was built in 2a and first exercised in slice 3,
+by changing `source.bucket`.
 
-### Slice 3 — rawdataforecaster
+### Slice 3 — rawdataforecaster — DONE
 
-**Starts with bug fixes, not the watcher.** Three panics are reachable from
-config data and must go first — under reload, a panic in the watch path kills a
-healthy serving process because somebody typo'd a web form:
+**Started with the bug fixes, not the watcher.** Three panics were reachable
+from config data: under reload, a panic in the watch path kills a healthy
+serving process because somebody typo'd a web form.
 
-| location | problem |
+| location | problem | now |
+|---|---|---|
+| `configuration.go:28` | `panic("no such downloader: " + type)` | `DownloadFunction` returns an error naming the accepted values |
+| `dataset.go:50` | unchecked `maxSizes.(map[string]interface{})` | `Loader.MaxSizesGiB` checks it |
+| `dataset.go:109` | unchecked `maxGiB.(float64)` | checked per area, reporting every bad value |
+
+`max_size_gib` settled on **the code's shape, an object keyed by area**, and the
+README was rewritten. One instance serves areas of very different sizes —
+`forecast.json` covers arctic, nordic and world — so a single number could not
+cap them separately, and the object is what `nowcast.json` ships. The README was
+wrong in two further ways nobody had noticed: the limit applies to every loader,
+not just `memory`, and it is compared against the area's total rather than each
+grid.
+
+| file | change |
 |---|---|
-| `configuration.go:31` | `panic("no such downloader: " + type)` on unknown `loader.type` |
-| `dataset.go:49` | unchecked `maxSizes.(map[string]interface{})` |
-| `dataset.go:112` | unchecked `maxGiB.(float64)` |
+| `internal/server/config/configuration.go` | `DownloadFunction` returns an error; `Loader.MaxSizesGiB` replaces both type assertions |
+| `internal/server/config/reload.go` | **new.** `Parse` returning `[]error`, `Problems()`, `ColdChanges()` |
+| `internal/server/forecast/forecast.go` | `SetConfig`; one config snapshot per poll round, threaded into `load`; `load` refuses to resurrect an area removed while it was downloading |
+| `internal/server/forecast/prometheus.go` | `forgetArea` drops the gauges of a removed area |
+| `internal/server/server.go` | `Run` takes the forecaster rather than building it, so `main` keeps the handle a reload needs |
+| `cmd/rawdataforecaster/main.go` | `-status-dir`; `configwatch.Watcher`; startup and reload share one validation path |
+| `build/package/Dockerfile` | config no longer implied; `/config` and `/status` created for `nobody`; `cmd/` copied before `go test` |
 
-Resolve the `max_size_gib` README-vs-code mismatch here too: pick one shape and
-make the docs match.
+**`maximum_gridpoint_distance` was left cold**, and is reported in
+`pending_restart` alongside `source.bucket` and `loader.*`. Lifting it to the
+live check was considered and declined: the badge tells the operator the truth
+either way, and it keeps `Dataset.GridLimit` and its test untouched.
 
-Then the reload: swap `Forecast.cfg` under the existing `RWMutex`; add the ~10
-lines to drop removed areas from `datasets` with `Close()`; diff old against new
-to populate `pending_restart` for `source.bucket` and `loader.*`. Adding an area
-needs no new code — the existing 3s poll loop at `forecast.go:129` handles it
-once `cfg` is swapped.
+**What the reload actually covers.** Only `areas` is live. `source.bucket` is
+never consulted again — the store is opened once in `New` — and the loader
+settings are read when an area is downloaded, so a change reaches each area
+only when its next version lands, hours away and one area at a time. Half
+applied is not applied, so `ColdChanges` reports all of them.
 
-Cheap optional win: lift `maximum_gridpoint_distance` out of
-`Dataset.GridLimit` to the check at `forecast.go:116`, moving it from cold to
-hot.
+**What `Problems()` catches**, following the same rule as jsonfrontend's — every
+check is for a mistake that would otherwise pass silently:
+
+- a `max_size_gib` key naming an area not in `areas`, so the limit caps nothing
+- `areas` empty, which answers every request with `no datasets available`
+- an area listed twice, or named `""`
+- an unknown or missing `loader.type`; `max_size_gib` of the wrong shape
+- a negative `maximum_gridpoint_distance`
+
+A regression test asserts the three shipped configs still validate, so the
+validator cannot quietly become stricter than production. That test reads
+`cmd/`, which is why the Dockerfile now copies `cmd/` before running the tests
+— the same trap jsonfrontend hit in slice 1.
+
+**Verified end-to-end** against a running binary and forti-control on a shared
+directory: adding an area starts it being served within one poll, removing one
+stops it and frees its readers, changing `source.bucket` shows the
+restart-required badge — its first real exercise, since jsonfrontend has no cold
+fields — and a config that would previously have panicked leaves the service on
+its old configuration with the reason in the status file.
 
 **Caveat:** this module cannot be built or tested outside the devcontainer — cgo
 against s2geometry and PROJ.
+
+**Left alone, found while working here.** `dataset.Download` leaks the readers
+it has already opened if `index.Add` fails (`dataset.go:78`); the loop closes
+them on a download error but not on an index error. Pre-existing, and reload
+makes it more reachable, but it is not this slice.
+
+**One deployment limit.** The status file is named after the module, so the
+three rawdataforecaster instances a full deployment runs — nowcast, forecast,
+oceanforecast — would all write `rawdataforecaster.json`. The controller's
+registry has one entry for the module, so this matches what it can manage
+today. Managing more than one instance needs a name per instance on both sides.
 
 ### Slice 4 — healthz
 

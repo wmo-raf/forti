@@ -14,16 +14,16 @@ import (
 
 	"github.com/metno/forti/internal/internalprotocol"
 	"github.com/metno/forti/rawdataforecaster/internal/health"
-	"github.com/metno/forti/rawdataforecaster/internal/server/config"
 	"github.com/metno/forti/rawdataforecaster/internal/server/forecast"
 )
 
-func Run(conf *config.Configuration, port int) error {
-
-	server, err := newForecastServer(conf)
-	if err != nil {
-		return err
-	}
+// Run serves the given forecaster over gRPC until the listener fails.
+//
+// The forecaster is built by the caller rather than here, because whoever owns
+// the configuration file has to keep a handle on it: that is what a reload has
+// to reach.
+func Run(forecast *forecast.Forecast, port int) error {
+	server := &forecastServer{forecast: forecast}
 
 	listenAddress := fmt.Sprintf(":%d", port)
 	lis, err := net.Listen("tcp", listenAddress)
@@ -48,17 +48,6 @@ func Run(conf *config.Configuration, port int) error {
 type forecastServer struct {
 	internalprotocol.UnimplementedForecasterServer
 	forecast *forecast.Forecast
-}
-
-func newForecastServer(conf *config.Configuration) (*forecastServer, error) {
-	forecast, err := forecast.New(conf)
-	if err != nil {
-		return nil, err
-	}
-
-	return &forecastServer{
-		forecast: forecast,
-	}, nil
 }
 
 func (s *forecastServer) GetForecast(ctx context.Context, in *internalprotocol.GetForecastRequest) (*internalprotocol.Forecast, error) {

@@ -65,3 +65,24 @@ func init() {
 		fortiAvailableUpdated,
 	)
 }
+
+// forgetArea removes the series belonging to an area that is no longer
+// configured.
+//
+// Without this, forti_active_latest keeps reporting a version for an area the
+// service stopped serving the moment it was removed — a gauge that says a
+// dataset is active when it is not is worse than no gauge at all.
+//
+// areaCounter and distanceHistogram are deliberately left alone: they count
+// what was requested, and that did happen.
+func forgetArea(area string) {
+	labels := prometheus.Labels{"area": area}
+	for _, gauge := range []*prometheus.GaugeVec{
+		fortiActiveLatest,
+		fortiActiveUpdated,
+		fortiAvailableLatest,
+		fortiAvailableUpdated,
+	} {
+		gauge.Delete(labels)
+	}
+}
