@@ -1,7 +1,7 @@
 # forti-control: Config Manager Design
 
-Status: **agreed**. Slice 1 (jsonfrontend worker side) **implemented**;
-`forti-control` itself not started.
+Status: **agreed**. Slice 1 (jsonfrontend worker side) and slice 2a
+(`forti-control` MVP) **implemented**.
 Date: 2026-09-08
 
 A web UI for managing forti's config files, with in-place reload — modelled on
@@ -250,17 +250,20 @@ rather than complaining:
 A regression test asserts the **shipped `jsonformat.json` still validates**, so
 the validator cannot quietly become stricter than production.
 
-### forti-control — NOT STARTED
+### forti-control — slice 2a DONE
 
-Login and user seeding; file editor with generated form plus advanced
-raw-JSON box; save with merge semantics and atomic write; snapshot + audit
-log; status panel polling `/status/*.json`.
+Lives in `../forti-control`, module `github.com/metno/forti-control`, with no
+Go dependency on forti. Login and seeded admin, module list, raw JSON editor,
+atomic save, content-addressed snapshots, audit log in SQLite linked to them by
+digest, one-click restore, and a status panel polling `/status/*.json`.
 
-### forti-control
+Verified end-to-end twice: against local processes, and against both services
+in containers on real Docker volumes with the asymmetric mounts. Editing
+`jsonformat.json` in a browser and saving reaches a running `jsonfrontend`
+within a second; saving two periods sharing an offset shows the service's own
+rejection message while it keeps serving the previous version.
 
-Login and user seeding; file editor with generated form plus advanced raw-JSON
-box; save with merge semantics and atomic write; snapshot + audit log; status
-panel polling `/status/*.json`.
+The generated forms and merge-don't-regenerate semantics are 2b, still to do.
 
 ---
 
@@ -346,21 +349,35 @@ nothing and returns raw data labelled as corrected.
 
 ## 7. Open questions
 
-Settled since: the file-watch interval is 1s (`configwatch.DefaultInterval`).
+All settled. The file-watch interval is 1s (`configwatch.DefaultInterval`).
+The four that blocked slice 2a were decided as part of it:
 
-These block slice 2a and should be decided as part of it:
+- **Audit log storage — SQLite**, through `modernc.org/sqlite`, which is
+  cgo-free, so the controller still builds anywhere. It holds the users, the
+  sessions and the audit log. The configuration itself stays in files: the
+  database holds only the controller's own bookkeeping.
+- **Restore — one click**, with an inline confirmation. A restore is an
+  ordinary save of old bytes: same atomic write, same audit entry with a
+  different action, and it reuses the snapshot it came from rather than
+  copying it. So a restore is itself undoable and history stays append-only.
+- **`/status` writability — confirmed, and it needed a fix.** Tested against a
+  real Docker volume: `USER nobody` **could not** write `/status`, because
+  Docker gives a fresh named volume the ownership of the image directory it is
+  mounted over, and that directory did not exist. The service ran fine and
+  every report was silently lost — this codebase's own bug pattern. The
+  Dockerfile now creates `/status` and `/config` owned by `nobody`. `/config`
+  is mounted read-only into services and read-write into the controller;
+  `/status` the other way round.
+- **Where `forti-control` lives — `../forti-control`**, its own git repo,
+  module `github.com/metno/forti-control`, no remote yet. No Go dependency on
+  forti: the contract is the two JSON documents on the volume.
 
-- **Audit log storage.** SQLite is the natural fit given local users, but not
-  decided. Whatever it is also stores the users.
-- **Restore.** Does the UI offer one-click restore from a snapshot, or only
-  show history and leave restoring to a copy? Restore is a normal save of old
-  content, so it is cheap — the question is whether it is exposed.
-- **`/status` writability.** Containers run `USER nobody`. Confirm they can
-  write the status directory on a real mount before the UI depends on reading
-  it; a separate `/status` volume keeps `/config` read-only to workers, which
-  is worth having anyway.
-- **Where `forti-control` lives.** A new repo was agreed, but it does not exist
-  yet and has no home. It needs no Go dependency on forti.
+### Found while driving slice 1 from the UI
+
+`jsonfrontend`'s Dockerfile ran `go test ./...` before copying
+`jsonfrontend/cmd`, but slice 1's new regression test reads the shipped
+`jsonformat.json` out of `cmd/`. The image could not build at all. The `COPY`
+now comes first.
 
 ---
 
