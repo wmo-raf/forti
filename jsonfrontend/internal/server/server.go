@@ -48,7 +48,12 @@ func (s *Server) Close() error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
-	forecastRequest, err := getForecastRequest(r)
+	// One snapshot for the whole request. Configuration can be replaced while
+	// this handler runs, and a response built from two different versions
+	// could contradict itself.
+	cfg := config.Current()
+
+	forecastRequest, err := getForecastRequest(cfg, r)
 	if err != nil {
 		//log.Println(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -65,7 +70,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !config.Configuration.LocationFromGrid || data.ForecastMeta.GridLocation == nil {
+	if !cfg.LocationFromGrid || data.ForecastMeta.GridLocation == nil {
 		data.ForecastMeta.GridLocation = &internalprotocol.Location{
 			Latitude:  forecastRequest.Latitude,
 			Longitude: forecastRequest.Longitude,
@@ -87,7 +92,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		metrics.UnspecifiedError.Add(1)
 		var err error
-		doc, err = encode.Encode(data)
+		doc, err = encode.Encode(cfg, data)
 		if err != nil {
 			log.Println(err)
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
@@ -104,10 +109,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	metrics.UpstreamProcessingDuration.Observe(time.Since(startTime).Seconds())
 
-	addHttpHeaders(w)
+	addHttpHeaders(cfg, w)
 
 	var out io.Writer = w
-	if config.Configuration.OfferGzip && requestsGzip(r) {
+	if cfg.OfferGzip && requestsGzip(r) {
 		metrics.RequestsWithGzip.Inc()
 		w.Header().Set("Content-Encoding", "gzip")
 		z := gzip.NewWriter(w)
@@ -132,18 +137,18 @@ func requestsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
-func addHttpHeaders(w http.ResponseWriter) {
-	for _, header := range config.Configuration.HTTPHeaders {
+func addHttpHeaders(cfg *config.Elements, w http.ResponseWriter) {
+	for _, header := range cfg.HTTPHeaders {
 		w.Header().Add(header.Key, header.Value)
 	}
 	now := time.Now()
 	w.Header().Add("Last-Modified", now.Format(http.TimeFormat))
 
-	expiry := expires(now, config.Configuration.DataExpiryOffset)
+	expiry := expires(now, cfg.DataExpiryOffset)
 	w.Header().Add("Expires", expiry.Format(http.TimeFormat))
 }
 
-func getForecastRequest(r *http.Request) (*internalprotocol.GetForecastRequest, error) {
+func getForecastRequest(cfg *config.Elements, r *http.Request) (*internalprotocol.GetForecastRequest, error) {
 	q := r.URL.Query()
 	latitude, err := getParam(q, "lat", -90, 90)
 	if err != nil {
@@ -159,7 +164,7 @@ func getForecastRequest(r *http.Request) (*internalprotocol.GetForecastRequest, 
 		Longitude: longitude,
 	}
 
-	if !config.Configuration.SkipAltitude {
+	if !cfg.SkipAltitude {
 		if _, ok := q["altitude"]; ok {
 			altitude, err := getParam(q, "altitude", -500, 9000)
 			if err != nil {

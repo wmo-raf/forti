@@ -18,6 +18,11 @@ The code for the batch jobs that produce the datasets are not included in this r
 
 [API Reference](docs/api-reference.md) – Complete documentation for the JSON REST API
 
+## Configuration management
+
+[Config manager design](docs/config-manager.md) – How configuration is reloaded
+without a restart, and the plan for the `forti-control` management UI
+
 ## Architecture
 
 The application is made up of several binaries working together.

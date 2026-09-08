@@ -61,10 +61,7 @@ const expectedJSONResponse = `{
 }`
 
 func TestEncode(t *testing.T) {
-	err := config.InitializeFromString(configString)
-	if err != nil {
-		t.Fatalf("Failed to setup config for encoding; Got error %v", err)
-	}
+	cfg := mustParse(t, configString)
 
 	forecast := internalprotocol.Forecast{
 		ForecastMeta: &internalprotocol.ForecastMeta{
@@ -91,7 +88,7 @@ func TestEncode(t *testing.T) {
 		Data: []float32{12.1, 0},
 	}
 
-	geojson, err := Encode(&forecast)
+	geojson, err := Encode(cfg, &forecast)
 	if err != nil {
 		t.Errorf("Expected correct GeoJSON; Got error: %v", err)
 	}
@@ -130,11 +127,8 @@ func TestEncode(t *testing.T) {
 }
 
 func TestEncodeSkipAltitude(t *testing.T) {
-	err := config.InitializeFromString(configString)
-	if err != nil {
-		t.Fatalf("Failed to setup config for encoding; Got error %v", err)
-	}
-	config.Configuration.SkipAltitude = true
+	cfg := mustParse(t, configString)
+	cfg.SkipAltitude = true
 
 	forecast := internalprotocol.Forecast{
 		ForecastStatus: internalprotocol.ForecastStatus_OK,
@@ -150,7 +144,7 @@ func TestEncodeSkipAltitude(t *testing.T) {
 		Data:          nil,
 	}
 
-	doc, err := Encode(&forecast)
+	doc, err := Encode(cfg, &forecast)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,4 +158,15 @@ func TestEncodeSkipAltitude(t *testing.T) {
 	if doc.Geometry.Coordinates[1] != 59 {
 		t.Errorf("unexpected latitude: %f", doc.Geometry.Coordinates[1])
 	}
+}
+
+// mustParse builds a configuration for a test, failing the test if the
+// configuration is not one jsonfrontend would accept at runtime.
+func mustParse(t *testing.T, config_ string) *config.Elements {
+	t.Helper()
+	conf, problems := config.Parse([]byte(config_))
+	if len(problems) != 0 {
+		t.Fatalf("failed to set up config for encoding: %v", problems)
+	}
+	return conf
 }
