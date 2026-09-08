@@ -346,10 +346,21 @@ nothing and returns raw data labelled as corrected.
 
 ## 7. Open questions
 
-- Audit log storage — SQLite is natural given local users, but not decided
-- File-watch poll interval (1s assumed)
-- Whether the UI offers one-click restore from a snapshot, or only shows history
-- `USER nobody` needs write access to `/status`; confirm the mount works
+Settled since: the file-watch interval is 1s (`configwatch.DefaultInterval`).
+
+These block slice 2a and should be decided as part of it:
+
+- **Audit log storage.** SQLite is the natural fit given local users, but not
+  decided. Whatever it is also stores the users.
+- **Restore.** Does the UI offer one-click restore from a snapshot, or only
+  show history and leave restoring to a copy? Restore is a normal save of old
+  content, so it is cheap — the question is whether it is exposed.
+- **`/status` writability.** Containers run `USER nobody`. Confirm they can
+  write the status directory on a real mount before the UI depends on reading
+  it; a separate `/status` volume keeps `/config` read-only to workers, which
+  is worth having anyway.
+- **Where `forti-control` lives.** A new repo was agreed, but it does not exist
+  yet and has no home. It needs no Go dependency on forti.
 
 ---
 
