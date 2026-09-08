@@ -3,6 +3,7 @@ package dataset
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -45,18 +46,27 @@ func Download(ctx context.Context, source internalformat.Client, datasetMeta *in
 		return nil, err
 	}
 
-	maxSizes, ok := cfg.Loader.Configuration["max_size_gib"]
-	if ok {
-		if err := verifySize(maxSizes.(map[string]interface{}), grids, datasetMeta); err != nil {
-			return nil, err
-		}
+	maxSizes, problems := cfg.Loader.MaxSizesGiB()
+	if len(problems) != 0 {
+		return nil, errors.Join(problems...)
+	}
+	if err := verifySize(maxSizes, grids, datasetMeta); err != nil {
+		return nil, err
+	}
+
+	// Resolved once rather than per grid, and before anything is downloaded:
+	// an unknown loader type is a mistake in the file, not something to
+	// discover halfway through.
+	download, err := cfg.DownloadFunction()
+	if err != nil {
+		return nil, err
 	}
 
 	var readers []values.Reader
 	var lookups []index.Nearester
 
 	for _, grid := range grids {
-		reader, err := cfg.DownloadFunction()(ctx, source, datasetMeta, grid.ID, cfg.Loader.Configuration)
+		reader, err := download(ctx, source, datasetMeta, grid.ID, cfg.Loader.Configuration)
 		if err != nil {
 			for _, r := range readers {
 				r.Close()
@@ -97,7 +107,9 @@ func Download(ctx context.Context, source internalformat.Client, datasetMeta *in
 	}, nil
 }
 
-func verifySize(maxSizes map[string]interface{}, grids []internalformat.GridInfo, datasetMeta *internalformat.DatasetMeta) error {
+// verifySize checks an area's total download against the limit configured for
+// it, if any. maxSizes is keyed by area name and holds GiB.
+func verifySize(maxSizes map[string]float64, grids []internalformat.GridInfo, datasetMeta *internalformat.DatasetMeta) error {
 	maxGiB, ok := maxSizes[datasetMeta.Area]
 	if ok {
 		var actualSize int64
@@ -106,7 +118,7 @@ func verifySize(maxSizes map[string]interface{}, grids []internalformat.GridInfo
 		}
 
 		const gib float64 = 1024 * 1024 * 1024
-		maxSize := int64(maxGiB.(float64) * gib)
+		maxSize := int64(maxGiB * gib)
 
 		if actualSize > maxSize {
 			return fmt.Errorf(

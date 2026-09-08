@@ -57,31 +57,50 @@ The `loader.type` config key selects how forecast data is held in memory:
 
 | Type | Behaviour | Use When |
 |---|---|---|
-| `memory` | Downloads the full grid blob at startup into CGo-allocated memory (bypassing GC pressure). Zero I/O at query time. Capped by `max_size_gib`. | Latency matters and the dataset fits in RAM |
+| `memory` | Downloads the full grid blob at startup into CGo-allocated memory (bypassing GC pressure). Zero I/O at query time. | Latency matters and the dataset fits in RAM |
 | `blob` | Downloads nothing upfront; issues a byte-range read per query (2 s timeout). | Dataset is too large for RAM, or startup time matters |
 
 Use `memory` when latency matters and the dataset fits in RAM; use `blob` otherwise.
 
-### Memory Loader Configuration
+### `loader.configuration`
 
-When using `loader.type: "memory"`, you can configure:
+#### `max_size_gib`
+
+Caps how much a single area is allowed to download. The check runs before any
+data is fetched, so an area over its limit is skipped and the previously loaded
+version of it stays in use.
+
+The limit applies to **both loader types**, not just `memory`, and it is
+compared against the **total of all grids in the area**, not each grid
+separately.
 
 ```json
 {
   "loader": {
-    "type": "memory",
+    "type": "blob",
     "configuration": {
-      "max_size_gib": 4
+      "max_size_gib": {
+        "nowcast": 0.2,
+        "world": 12
+      }
     }
   }
 }
 ```
 
-- **`max_size_gib`** (number, optional): Maximum size in GiB for each loaded grid. Grids larger than this are rejected at startup.
+- **`max_size_gib`** (object, optional): Maximum download size in GiB, keyed by
+  area name. An area with no key here is not capped. The value must be a
+  positive number.
 
-### Blob Loader Configuration
+It is an object rather than a single number because one rawdataforecaster
+instance commonly serves several areas of very different sizes — `arctic`,
+`nordic` and `world` in the same file — which a single limit could not cap
+separately.
 
-The `blob` loader has no additional configuration options.
+> Earlier revisions of this document showed `"max_size_gib": 4`, a bare number.
+> That shape has never been accepted by the code, and until recently it crashed
+> the process on startup. It is now rejected with an error naming the shape
+> above.
 
 ## Native dependencies
 
