@@ -254,14 +254,24 @@ func (f *Forecast) load(ctx context.Context, cfg *config.Configuration, area str
 		log.Printf("discarding %s/%d: no longer configured", area, version)
 		return nil
 	}
-	if old, ok := f.datasets[area]; ok {
-		old.Close()
-	}
+	replaced := f.datasets[area]
 	f.datasets[area] = ds
-	f.m.Unlock()
 
+	// Set under the same lock that SetConfig drops these gauges under.
+	// Outside it, a SetConfig removing this area in the window between the
+	// unlock and here would run forgetArea first, and this would then put back
+	// a gauge saying an area is active that is no longer served.
 	fortiActiveLatest.With(prometheusLabel).Set(float64(version))
 	fortiActiveUpdated.With(prometheusLabel).Set(float64(time.Now().Unix()))
+	f.m.Unlock()
+
+	// Closed after the lock is released, as in SetConfig: it is out of the map
+	// and every reader of it has finished.
+	if replaced != nil {
+		if err := replaced.Close(); err != nil {
+			log.Printf("closing replaced dataset %s: %s", area, err)
+		}
+	}
 
 	log.Printf("active: %s/%d", area, version)
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -39,15 +40,6 @@ func main() {
 	if err := watcher.Load(); err != nil {
 		log.Fatalf("unable to read configuration: %s", err)
 	}
-	conf := reloader.config()
-
-	log.Printf("use %s storage strategy", conf.Loader.Type)
-
-	forecaster, err := forecast.New(conf)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	reloader.attach(forecaster)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -57,34 +49,34 @@ func main() {
 		go serveStats()
 	}
 
-	log.Fatalln(server.Run(forecaster, *port))
+	log.Fatalln(server.Run(reloader.running(), *port))
 }
 
-// reloader applies configuration files to the running forecaster.
+// reloader puts configuration files into effect.
 //
-// It exists because the first configuration has to be validated before there
-// is anything to apply it to. Startup and reload therefore take the same path
-// through apply, which is the point: a file that reload would refuse must not
-// be one that startup quietly accepts.
+// The first file has to build the forecaster and later ones have to change it,
+// but both go through apply, so they are validated and reported the same way.
+// Building here rather than in main is what lets a bucket that cannot be
+// opened reach the status file: reporting startup as successful and then
+// exiting would leave a config manager looking at a green status file behind a
+// dead process, which is this codebase's own bug pattern.
 type reloader struct {
 	mu sync.Mutex
 
-	current    *config.Configuration
+	// booted is the configuration the forecaster was constructed from. Cold
+	// settings are compared against this rather than against the previous
+	// file, because "needs a restart" describes the running process, not the
+	// last edit. Diffing edit against edit would drop the warning on the next
+	// unrelated save while the process was still using the old value.
+	booted     *config.Configuration
 	forecaster *forecast.Forecast
 }
 
-// config returns the configuration last applied.
-func (r *reloader) config() *config.Configuration {
+// running returns the forecaster, which exists once apply has succeeded once.
+func (r *reloader) running() *forecast.Forecast {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.current
-}
-
-// attach hands over the running forecaster, after which reloads reach it.
-func (r *reloader) attach(f *forecast.Forecast) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.forecaster = f
+	return r.forecaster
 }
 
 // apply validates a configuration file and puts it into use. It never touches
@@ -99,12 +91,17 @@ func (r *reloader) apply(data []byte) configwatch.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	previous := r.current
-	r.current = conf
-
 	if r.forecaster == nil {
-		// Startup. There is nothing to apply this to yet, but everything in it
-		// is about to be used to build the forecaster.
+		log.Printf("use %s storage strategy", conf.Loader.Type)
+
+		forecaster, err := forecast.New(conf)
+		if err != nil {
+			return configwatch.Result{Errors: []error{
+				fmt.Errorf("source.bucket: %w", err)}}
+		}
+		r.forecaster = forecaster
+		r.booted = conf
+
 		return configwatch.Result{
 			Applied: []string{"source", "areas", "loader", "maximum_gridpoint_distance"},
 		}
@@ -114,7 +111,7 @@ func (r *reloader) apply(data []byte) configwatch.Result {
 
 	return configwatch.Result{
 		Applied:        []string{"areas"},
-		PendingRestart: config.ColdChanges(previous, conf),
+		PendingRestart: config.ColdChanges(r.booted, conf),
 	}
 }
 

@@ -83,9 +83,14 @@ func (c *Configuration) Problems() []error {
 	return problems
 }
 
-// ColdChanges names the settings that differ between two configurations and
-// cannot be fully honoured without a restart. It returns them in the order
-// they appear in the file.
+// ColdChanges names the settings in proposed that the running process cannot
+// honour without a restart. It returns them in the order they appear in the
+// file.
+//
+// running must be the configuration the process was built from, not the file
+// saved before this one. "Needs a restart" is a fact about the running
+// process, so comparing one edit against the previous edit would drop the
+// warning on the next unrelated save while the old value was still in use.
 //
 // The forecaster reads its configuration at two moments: when a request
 // arrives, and when it downloads a new version of an area. Only the area list
@@ -100,22 +105,22 @@ func (c *Configuration) Problems() []error {
 //
 // Adding or removing an area is deliberately absent: those take effect within
 // one poll, and asking for a restart would be a lie.
-func ColdChanges(old, new *Configuration) []string {
-	if old == nil {
+func ColdChanges(running, proposed *Configuration) []string {
+	if running == nil {
 		return nil
 	}
 
 	var changed []string
-	if old.Source.Bucket != new.Source.Bucket {
+	if running.Source.Bucket != proposed.Source.Bucket {
 		changed = append(changed, "source.bucket")
 	}
-	if old.Loader.Type != new.Loader.Type {
+	if running.Loader.Type != proposed.Loader.Type {
 		changed = append(changed, "loader.type")
 	}
-	if !reflect.DeepEqual(old.Loader.Configuration, new.Loader.Configuration) {
+	if !reflect.DeepEqual(running.Loader.Configuration, proposed.Loader.Configuration) {
 		changed = append(changed, "loader.configuration")
 	}
-	if old.MaximumGridPointDistance != new.MaximumGridPointDistance {
+	if running.MaximumGridPointDistance != proposed.MaximumGridPointDistance {
 		changed = append(changed, "maximum_gridpoint_distance")
 	}
 	return changed

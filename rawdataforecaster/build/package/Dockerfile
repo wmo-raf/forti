@@ -100,4 +100,9 @@ RUN mkdir -p /status /config && chown nobody:nogroup /status /config
 USER nobody
 
 ENTRYPOINT [ "/usr/local/bin/rawdataforecaster" ]
+
+# A default, not a decision: this image is run once per product, and each
+# instance names its own file. Deployments override this — and an override
+# replaces the whole of it, so it has to repeat -status-dir or the service
+# silently stops reporting.
 CMD [ "-config", "/config/nowcast.json", "-status-dir", "/status" ]

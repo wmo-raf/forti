@@ -365,11 +365,25 @@ it has already opened if `index.Add` fails (`dataset.go:78`); the loop closes
 them on a download error but not on an index error. Pre-existing, and reload
 makes it more reachable, but it is not this slice.
 
-**One deployment limit.** The status file is named after the module, so the
-three rawdataforecaster instances a full deployment runs — nowcast, forecast,
-oceanforecast — would all write `rawdataforecaster.json`. The controller's
-registry has one entry for the module, so this matches what it can manage
-today. Managing more than one instance needs a name per instance on both sides.
+**`pending_restart` is compared against the running process, not the previous
+file.** `main.go` keeps the configuration the forecaster was built from and
+diffs against that. Diffing each edit against the one before it looked right
+and was not: change `source.bucket`, save, and the badge appears; save again
+with only an area added and the badge disappears, while the process is still
+using the bucket it started with. That is this project's own bug pattern —
+a change that quietly did nothing, reported as though it had worked.
+
+**Two deployment limits.**
+
+- The status file is named after the module, so the three rawdataforecaster
+  instances a full deployment runs — nowcast, forecast, oceanforecast — would
+  all write `rawdataforecaster.json`. The controller's registry has one entry
+  for the module, so this matches what it can manage today. Managing more than
+  one instance needs a name per instance on both sides.
+- The Dockerfile's `CMD` carries both `-config` and `-status-dir`, and Docker
+  replaces a `CMD` wholesale. A deployment that overrides it to name its own
+  product file must repeat `-status-dir`, or the service runs correctly and
+  reports nothing — the same silent loss the `/status` ownership fix was for.
 
 ### Slice 4 — healthz
 
