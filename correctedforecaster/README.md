@@ -54,6 +54,17 @@ The topography data directory must contain elevation data files that cover the g
 
 Topography files can be in any raster format readable by GDAL (GeoTIFF, NetCDF, HDF5, etc.). The files must contain elevation data with proper geospatial projection information.
 
+Only files with a recognised raster extension are loaded, so sidecars and
+documentation can sit alongside the data without stopping the service:
+
+`.asc` `.bil` `.bt` `.dem` `.dt0` `.dt1` `.dt2` `.grd` `.gtx` `.h5` `.hdf`
+`.hdf5` `.hgt` `.img` `.nc` `.nc4` `.tif` `.tiff` `.vrt`
+
+Every skipped file is logged. A raster in a format not on this list is skipped
+too, and the only symptom is an uncorrected forecast — so if a file is missing
+from the service, check the log for it and extend `rasterExtensions` in
+`internal/download/download.go` rather than renaming the data.
+
 ## Architecture
 
 ```

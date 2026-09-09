@@ -142,3 +142,49 @@ func TestListDirRecursesIntoSubdirectories(t *testing.T) {
 		t.Errorf("got %v, want %v", files, want)
 	}
 }
+
+// ListDir handed GDAL every non-directory file it found. A .aux.xml sidecar,
+// a README or a stray .DS_Store fails lookup.Open, which fails Collection.Add,
+// which fails server.New, which main.go turns into a log.Fatalf. One stray
+// file and there is no service at all.
+func TestListDirSkipsFilesGDALCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir,
+		"10-region.tif",
+		"10-region.tif.aux.xml",
+		"20-global.nc",
+		"README",
+		"notes.md",
+		".DS_Store",
+	)
+
+	files, err := ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(dir, "10-region.tif"),
+		filepath.Join(dir, "20-global.nc"),
+	}
+	if !slices.Equal(files, want) {
+		t.Errorf("got %v, want %v", files, want)
+	}
+}
+
+// The filter is on the extension, not on the name, so an unusual but valid
+// raster is still served. Narrowing this list silently drops working data,
+// which is why every skip is logged.
+func TestListDirKeepsLessCommonRasterFormats(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "a.vrt", "b.img", "c.hgt", "d.TIFF", "e.bil", "f.asc")
+
+	files, err := ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+
+	if len(files) != 6 {
+		t.Errorf("expected all six rasters, got %v", files)
+	}
+}
