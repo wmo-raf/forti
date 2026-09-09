@@ -95,13 +95,28 @@ func download(ctx context.Context, bkt *blob.Bucket, obj *blob.ListObject, toDir
 		return "", fmt.Errorf("could not verify that file %s is within target directory %s", filename, toDir)
 	}
 
+	// A blob key may contain slashes, and os.Create will not create the
+	// directories leading to the file. Done after the traversal check above,
+	// so a key climbing out of toDir cannot create directories on its way.
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		return "", err
+	}
+
+	// Anything other than "it is not there" is a real error and has to be
+	// reported: os.Stat leaves stat nil, so reading its size would panic.
+	// Reachable with nested keys, where a file standing where a directory
+	// belongs gives ENOTDIR rather than ENOENT.
 	stat, err := os.Stat(filename)
-	if os.IsNotExist(err) || stat.Size() != obj.Size {
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if stat == nil || stat.Size() != obj.Size {
 		log.Println("download " + filename)
 		f, err := os.Create(filename)
 		if err != nil {
 			return "", err
 		}
+		defer f.Close()
 		r, err := bkt.NewReader(ctx, obj.Key, nil)
 		if err != nil {
 			return "", err
@@ -114,7 +129,7 @@ func download(ctx context.Context, bkt *blob.Bucket, obj *blob.ListObject, toDir
 	}
 
 	log.Println(filename + " already exists")
-	return filename, err
+	return filename, nil
 }
 
 // fileWithinDir checks that the given file is within the given directory, preventing path traversal attacks.

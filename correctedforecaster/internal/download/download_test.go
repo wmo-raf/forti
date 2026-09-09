@@ -188,3 +188,40 @@ func TestListDirKeepsLessCommonRasterFormats(t *testing.T) {
 		t.Errorf("expected all six rasters, got %v", files)
 	}
 }
+
+// A blob key may contain slashes. os.Create does not create the directories
+// leading to a file, so a nested key failed the download outright -- which
+// main.go turns into a log.Fatalf. Grouping topography by subdirectory makes
+// nested keys the normal case rather than an oddity.
+func TestDownloadCreatesParentDirectoriesForNestedKey(t *testing.T) {
+	ctx := context.Background()
+	bkt, err := blob.OpenBucket(ctx, "mem://")
+	if err != nil {
+		t.Fatalf("opening mem bucket: %v", err)
+	}
+	defer bkt.Close()
+
+	const key = "consumer-a/10-region.tif"
+	const content = "abc"
+	if err := bkt.WriteAll(ctx, key, []byte(content), nil); err != nil {
+		t.Fatalf("writing object: %v", err)
+	}
+
+	toDir := t.TempDir()
+	filename, err := download(ctx, bkt, &blob.ListObject{Key: key, Size: int64(len(content))}, toDir)
+	if err != nil {
+		t.Fatalf("download returned error: %v", err)
+	}
+
+	expected := filepath.Join(toDir, filepath.FromSlash(key))
+	if filename != expected {
+		t.Fatalf("unexpected filename: got %q, want %q", filename, expected)
+	}
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("reading downloaded file: %v", err)
+	}
+	if string(b) != content {
+		t.Fatalf("unexpected file content: got %q, want %q", string(b), content)
+	}
+}
