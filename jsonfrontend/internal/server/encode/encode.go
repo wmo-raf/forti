@@ -93,6 +93,11 @@ func getMeta(cfg *config.Elements, forecast *internalprotocol.Forecast) jsonform
 		UpdatedAt:     time.Unix(forecast.ForecastMeta.UpdatedAt.Seconds, 0).UTC(),
 		Units:         units,
 		RadarCoverage: getRadarCoverage(cfg, forecast),
+		// Reported unconditionally rather than only when the request asked
+		// for an area. A caller that named none still learns which area
+		// answered, and a caller that named several learns which of them it
+		// got -- neither of which it could work out from the coordinates.
+		Area: forecast.ForecastMeta.Area,
 	}
 }
 

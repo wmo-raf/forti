@@ -51,9 +51,10 @@ that matches nothing gets `OutsideAllGrids` — outside all the grids it asked
 for. A mistyped name therefore fails rather than quietly falling back to the
 wider set, which would look like the parameter was working when it was not.
 
-Which area answered is carried on the internal gRPC response but is **not**
-part of this JSON format, so an HTTP caller cannot yet check that the
-constraint held except by inferring it from the returned grid coordinates.
+The area that answered is reported back as `properties.meta.area`, so a caller
+can assert that the constraint held rather than inferring it from the returned
+grid coordinates. It is reported whether or not the request named an area: a
+caller that named none still learns which area answered.
 
 ### Selecting topography
 
@@ -74,10 +75,11 @@ tell that it had.
 
 Both parameters express a caller's intent. Whether that intent is right is the
 caller's responsibility: a caller that computes the wrong list gets a plausible
-forecast from the wrong area, or an uncorrected one, with no error anywhere —
-and over this JSON API, no way to tell from the response that it happened.
-That is a materially weaker property than running one service per group of
-areas, where a caller bug is a connection failure rather than wrong data.
+forecast from the wrong area, or an uncorrected one, with no error anywhere.
+`meta.area` makes the first of those two auditable; nothing yet reports which
+topography set was consulted, so the second is not. That is a materially
+weaker property than running one service per group of areas, where a caller
+bug is a connection failure rather than wrong data.
 
 They exist for deployments that have chosen to share one process across
 independent consumers. A deployment that runs a process per consumer needs
@@ -161,6 +163,7 @@ The `properties` object contains two main sections:
 |-------|------|-------------|
 | `updated_at` | ISO 8601 timestamp | When the forecast data was last updated |
 | `units` | object | Units for all parameters in the forecast (e.g., `{"air_temperature": "celsius"}`) |
+| `area` | string | The model area that answered. Omitted if the upstream does not report one. |
 | `radar_coverage` | string | (Optional) Radar coverage status |
 
 #### Timeseries

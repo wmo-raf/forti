@@ -15,6 +15,11 @@ type Metadata struct {
 	Error         string            `json:"error,omitempty"`
 	Units         map[string]string `json:"units"`
 	RadarCoverage string            `json:"radar_coverage,omitempty"`
+
+	// Area is the model area that answered, when the upstream says which.
+	// Omitted when it does not: an upstream predating the field leaves it
+	// empty, and a response with no area is better than one asserting "".
+	Area string `json:"area,omitempty"`
 }
 
 type TimeStep struct {

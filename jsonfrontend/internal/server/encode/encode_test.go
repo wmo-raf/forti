@@ -2,6 +2,7 @@ package encode
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,4 +170,49 @@ func mustParse(t *testing.T, config_ string) *config.Elements {
 		t.Fatalf("failed to set up config for encoding: %v", problems)
 	}
 	return conf
+}
+
+// The area that answered is reported so a caller can check that an ?area=
+// constraint held, rather than inferring it from the returned coordinates.
+func TestEncodeReportsTheAnsweringArea(t *testing.T) {
+	forecast := &internalprotocol.Forecast{
+		ForecastMeta: &internalprotocol.ForecastMeta{
+			UpdatedAt:    timestamppb.New(time.Now()),
+			GridLocation: &internalprotocol.Location{Latitude: 59.93, Longitude: 10.72},
+			Area:         "meps",
+		},
+	}
+
+	doc, err := Encode(&config.Elements{SkipAltitude: true}, forecast)
+	if err != nil {
+		t.Fatalf("Encode: %s", err)
+	}
+	if doc.Properties.Meta.Area != "meps" {
+		t.Errorf("area is %q, want %q", doc.Properties.Meta.Area, "meps")
+	}
+}
+
+// An upstream that does not report an area -- one predating the field, or a
+// response that never reached a dataset -- must leave it out of the document
+// entirely rather than emitting an empty string.
+func TestEncodeOmitsAnUnknownArea(t *testing.T) {
+	forecast := &internalprotocol.Forecast{
+		ForecastMeta: &internalprotocol.ForecastMeta{
+			UpdatedAt:    timestamppb.New(time.Now()),
+			GridLocation: &internalprotocol.Location{Latitude: 59.93, Longitude: 10.72},
+		},
+	}
+
+	doc, err := Encode(&config.Elements{SkipAltitude: true}, forecast)
+	if err != nil {
+		t.Fatalf("Encode: %s", err)
+	}
+
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("Marshal: %s", err)
+	}
+	if strings.Contains(string(encoded), "\"area\"") {
+		t.Errorf("area appears in a document that has none: %s", encoded)
+	}
 }
