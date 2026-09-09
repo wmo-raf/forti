@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -48,18 +48,28 @@ func Get(ctx context.Context, fromBlob, toDir string) ([]string, error) {
 	return files, nil
 }
 
+// ListDir returns every file under dir, at any depth.
+//
+// It recurses because the bucket path does. A bucket key may contain slashes,
+// and Get returns the nested path it downloaded to; a later restart without
+// -download-from re-scans the same directory and has to find the same files.
+// Listing only the top level meant the first boot served nested data and the
+// next one silently served none of it.
 func ListDir(dir string) ([]string, error) {
-	finfo, err := ioutil.ReadDir(dir)
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		log.Println("serve " + path)
+		files = append(files, path)
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	var files []string
-	for _, f := range finfo {
-		if !f.IsDir() {
-			fname := filepath.Join(dir, f.Name())
-			log.Println("serve " + fname)
-			files = append(files, fname)
-		}
 	}
 
 	sort.Strings(files)

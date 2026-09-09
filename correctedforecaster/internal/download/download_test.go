@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"gocloud.dev/blob"
@@ -81,5 +82,63 @@ func TestDownloadRejectsPathTraversalKey(t *testing.T) {
 	escapedPath := filepath.Join(baseDir, "escape.txt")
 	if _, statErr := os.Stat(escapedPath); !os.IsNotExist(statErr) {
 		t.Fatalf("expected no file to be created outside target dir, stat err: %v", statErr)
+	}
+}
+
+// writeFiles creates each named file, relative to dir, creating parent
+// directories as needed.
+func writeFiles(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("creating parent of %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+}
+
+// The regression that matters most: a flat directory has to keep listing
+// exactly what it listed before, in the same order.
+func TestListDirFlatDirectoryIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "20-global.tif", "10-region.tif")
+
+	files, err := ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(dir, "10-region.tif"),
+		filepath.Join(dir, "20-global.tif"),
+	}
+	if !slices.Equal(files, want) {
+		t.Errorf("got %v, want %v", files, want)
+	}
+}
+
+// ListDir used ReadDir and skipped directories, so a grouped layout was
+// invisible to a restart without -download-from: the first boot downloaded and
+// served the nested files, and the next one silently served none of them.
+func TestListDirRecursesIntoSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "20-global.tif", "consumer-a/10-region.tif", "consumer-b/nested/deep.tif")
+
+	files, err := ListDir(dir)
+	if err != nil {
+		t.Fatalf("ListDir: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(dir, "20-global.tif"),
+		filepath.Join(dir, "consumer-a", "10-region.tif"),
+		filepath.Join(dir, "consumer-b", "nested", "deep.tif"),
+	}
+	slices.Sort(want)
+	if !slices.Equal(files, want) {
+		t.Errorf("got %v, want %v", files, want)
 	}
 }
