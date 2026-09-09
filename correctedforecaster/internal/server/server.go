@@ -14,14 +14,15 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/metno/forti/correctedforecaster/internal/correction"
+	"github.com/metno/forti/correctedforecaster/internal/download"
 	"github.com/metno/forti/correctedforecaster/internal/health"
 	"github.com/metno/forti/correctedforecaster/internal/lookup"
 	"github.com/metno/forti/internal/internalprotocol"
 	"github.com/metno/forti/internal/radar"
 )
 
-func Run(upstream string, port int, topographyFiles []string) error {
-	server, err := New(upstream, topographyFiles)
+func Run(upstream string, port int, topography download.Grouped) error {
+	server, err := New(upstream, topography)
 	if err != nil {
 		return err
 	}
@@ -46,13 +47,21 @@ func Run(upstream string, port int, topographyFiles []string) error {
 type Server struct {
 	internalprotocol.UnimplementedForecasterServer
 
+	// topo is the default topography: the files at the root of the work
+	// directory. It answers a request that names no set, and lies underneath
+	// every named set as a fallback.
 	topo *lookup.Collection
+
+	// topoSets are the named sets, one per subdirectory of the work
+	// directory. Kept apart from topo rather than in the same map under an
+	// empty key, so that a request naming "" cannot reach the default.
+	topoSets map[string]*lookup.Collection
 
 	conn   *grpc.ClientConn
 	client internalprotocol.ForecasterClient
 }
 
-func New(upstream string, topographyFiles []string) (*Server, error) {
+func New(upstream string, topography download.Grouped) (*Server, error) {
 	conn, err := grpc.Dial(upstream,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
@@ -64,16 +73,42 @@ func New(upstream string, topographyFiles []string) (*Server, error) {
 
 	client := internalprotocol.NewForecasterClient(conn)
 
-	topo := lookup.NewCollection()
-	if err := topo.Add(topographyFiles...); err != nil {
-		return nil, fmt.Errorf("unable to add topography: %w", err)
+	topo, topoSets, err := openTopography(topography)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Server{
-		topo:   topo,
-		conn:   conn,
-		client: client,
+		topo:     topo,
+		topoSets: topoSets,
+		conn:     conn,
+		client:   client,
 	}, nil
+}
+
+// openTopography opens one Collection per group: the default set from the
+// files at the root, and one named set per subdirectory.
+func openTopography(topography download.Grouped) (*lookup.Collection, map[string]*lookup.Collection, error) {
+	topo := lookup.NewCollection()
+	if err := topo.Add(topography[download.DefaultSet]...); err != nil {
+		return nil, nil, fmt.Errorf("unable to add topography: %w", err)
+	}
+	log.Printf("default topography: %d files", len(topography[download.DefaultSet]))
+
+	topoSets := make(map[string]*lookup.Collection)
+	for name, files := range topography {
+		if name == download.DefaultSet {
+			continue
+		}
+		c := lookup.NewCollection()
+		if err := c.Add(files...); err != nil {
+			return nil, nil, fmt.Errorf("unable to add topography set %s: %w", name, err)
+		}
+		log.Printf("topography set %s: %d files", name, len(files))
+		topoSets[name] = c
+	}
+
+	return topo, topoSets, nil
 }
 
 func waitForUpstream(client internalprotocol.ForecasterClient) {
@@ -134,15 +169,19 @@ func (s *Server) correctWithBetterTopography(request *internalprotocol.GetForeca
 	if request.Altitude != nil && request.Altitude.Override {
 		realAltitude = request.Altitude.Value
 	} else {
-		var err error
-		realAltitude, err = s.topo.Lookup(float64(request.Latitude), float64(request.Longitude))
+		found, err := s.lookupTopography(request.Topography, float64(request.Latitude), float64(request.Longitude))
 		if err != nil {
-			if lookup.IsOutOfBounds(err) {
-				realAltitude = *modelAltitude
-			} else {
-				log.Printf("unable to lookup topography for location: %s", err)
-				return fmt.Errorf("unable to lookup topography for location: %w", err)
-			}
+			log.Printf("unable to lookup topography for location: %s", err)
+			return fmt.Errorf("unable to lookup topography for location: %w", err)
+		}
+		if found == nil {
+			// No topography covers this point, so there is nothing to correct
+			// towards. Taking the model's own altitude leaves the difference
+			// at zero and the forecast uncorrected, which is what has always
+			// been served where a DEM ends.
+			realAltitude = *modelAltitude
+		} else {
+			realAltitude = *found
 		}
 		realAltitude = float32(math.Round(float64(realAltitude)))
 	}
@@ -158,6 +197,65 @@ func (s *Server) correctWithBetterTopography(request *internalprotocol.GetForeca
 	*modelAltitude = realAltitude
 
 	return nil
+}
+
+// lookupTopography returns the real ground altitude at a point from the first
+// collection that has data there, or nil if none does.
+//
+// The named sets come first, in the order the request gave them, and the
+// default set last: a consumer supplies its own fine DEM and gets the global
+// one underneath it for free. Priority within a set is still filename order,
+// so the existing naming convention keeps working inside each group.
+func (s *Server) lookupTopography(sets []string, latitude, longitude float64) (*float32, error) {
+	for _, c := range s.topographyFor(sets) {
+		val, err := c.Lookup(latitude, longitude)
+		if err != nil {
+			if lookup.IsOutOfBounds(err) {
+				continue
+			}
+			return nil, err
+		}
+		return &val, nil
+	}
+	return nil, nil
+}
+
+// topographyFor returns the collections to consult for a request naming the
+// given sets, in the order to consult them. No names means the default set
+// alone, which is what a request that does not ask for one carries.
+//
+// An unrecognised name yields nothing at all -- not even the default. Falling
+// back to the default would hand the caller terrain data it did not ask for
+// and has no way to detect, and returning an error would turn a typo into an
+// outage. With nothing to consult the lookup misses and the forecast degrades
+// to uncorrected, which is what is already served wherever no DEM reaches.
+//
+// Note that this is the opposite of what an unknown *area* does, which fails
+// closed to OutsideAllGrids. The asymmetry is deliberate: a missing grid
+// means there is no forecast to give, while a missing DEM means there is one,
+// just uncorrected.
+func (s *Server) topographyFor(sets []string) []*lookup.Collection {
+	if len(sets) == 0 {
+		return s.defaultTopography()
+	}
+
+	collections := make([]*lookup.Collection, 0, len(sets)+1)
+	for _, name := range sets {
+		c, ok := s.topoSets[name]
+		if !ok {
+			log.Printf("no topography set named %q: serving an uncorrected forecast", name)
+			return nil
+		}
+		collections = append(collections, c)
+	}
+	return append(collections, s.defaultTopography()...)
+}
+
+func (s *Server) defaultTopography() []*lookup.Collection {
+	if s.topo == nil {
+		return nil
+	}
+	return []*lookup.Collection{s.topo}
 }
 
 func getAltitude(interpreted map[string]internalprotocol.InterpretedData) (*float32, bool) {

@@ -106,10 +106,11 @@ func TestListDirFlatDirectoryIsUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, "20-global.tif", "10-region.tif")
 
-	files, err := ListDir(dir)
+	sets, err := ListDir(dir)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
+	files := sets.All()
 
 	want := []string{
 		filepath.Join(dir, "10-region.tif"),
@@ -127,17 +128,17 @@ func TestListDirRecursesIntoSubdirectories(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, "20-global.tif", "consumer-a/10-region.tif", "consumer-b/nested/deep.tif")
 
-	files, err := ListDir(dir)
+	sets, err := ListDir(dir)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
+	files := sets.All()
 
 	want := []string{
 		filepath.Join(dir, "20-global.tif"),
 		filepath.Join(dir, "consumer-a", "10-region.tif"),
 		filepath.Join(dir, "consumer-b", "nested", "deep.tif"),
 	}
-	slices.Sort(want)
 	if !slices.Equal(files, want) {
 		t.Errorf("got %v, want %v", files, want)
 	}
@@ -158,10 +159,11 @@ func TestListDirSkipsFilesGDALCannotRead(t *testing.T) {
 		".DS_Store",
 	)
 
-	files, err := ListDir(dir)
+	sets, err := ListDir(dir)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
+	files := sets.All()
 
 	want := []string{
 		filepath.Join(dir, "10-region.tif"),
@@ -179,10 +181,11 @@ func TestListDirKeepsLessCommonRasterFormats(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, "a.vrt", "b.img", "c.hgt", "d.TIFF", "e.bil", "f.asc")
 
-	files, err := ListDir(dir)
+	sets, err := ListDir(dir)
 	if err != nil {
 		t.Fatalf("ListDir: %v", err)
 	}
+	files := sets.All()
 
 	if len(files) != 6 {
 		t.Errorf("expected all six rasters, got %v", files)

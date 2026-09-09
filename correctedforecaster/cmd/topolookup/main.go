@@ -19,13 +19,16 @@ func main() {
 	workdir := flag.String("workdir", "/data/", "use files in the given directory")
 	flag.Parse()
 
-	files, err := download.ListDir(*workdir)
+	sets, err := download.ListDir(*workdir)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
+	// One collection over every set. This tool is for asking what the data
+	// says at a point, not for reproducing which consumer sees what, and for
+	// a directory with no subdirectories it is the same list as before.
 	c := lookup.NewCollection()
-	if err := c.Add(files...); err != nil {
+	if err := c.Add(sets.All()...); err != nil {
 		log.Fatalln(err)
 	}
 

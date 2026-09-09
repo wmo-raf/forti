@@ -14,8 +14,45 @@ import (
 	"gocloud.dev/blob"
 )
 
-// Get downloads all files from the given blob storage into the given folder.
-func Get(ctx context.Context, fromBlob, toDir string) ([]string, error) {
+// DefaultSet is the name of the group holding the files at the root of the
+// work directory. It is the set consulted by a request that names none, and
+// it lies underneath every named set as a fallback.
+//
+// A subdirectory cannot be called "", so no named set can collide with it.
+const DefaultSet = ""
+
+// Grouped is topography files grouped by the first path segment below the
+// work directory. Files at the root are under DefaultSet; a file in
+// consumer-a/, at any depth, is under "consumer-a".
+//
+// Within each group the files stay in sorted order, because Collection.Lookup
+// takes the first file with data at a point and so priority is filename
+// order. That convention is unchanged; it now applies within a group rather
+// than across the whole directory.
+type Grouped map[string][]string
+
+// All returns every file in every group, the default set first and the named
+// sets after it in name order. For a directory with no subdirectories this is
+// exactly the flat list that Get used to return.
+func (g Grouped) All() []string {
+	names := make([]string, 0, len(g))
+	for name := range g {
+		if name != DefaultSet {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	files := append([]string(nil), g[DefaultSet]...)
+	for _, name := range names {
+		files = append(files, g[name]...)
+	}
+	return files
+}
+
+// Get downloads all files from the given blob storage into the given folder,
+// grouped by the subdirectory they were found in.
+func Get(ctx context.Context, fromBlob, toDir string) (Grouped, error) {
 	if fromBlob == "" {
 		log.Printf("no blob address given - just using contents of folder %s as data source", toDir)
 		return ListDir(toDir)
@@ -27,7 +64,7 @@ func Get(ctx context.Context, fromBlob, toDir string) ([]string, error) {
 	}
 	defer bkt.Close()
 
-	var files []string
+	sets := make(Grouped)
 	it := bkt.List(nil)
 	for {
 		obj, err := it.Next(ctx)
@@ -49,22 +86,49 @@ func Get(ctx context.Context, fromBlob, toDir string) ([]string, error) {
 			log.Printf("skipping %s: not a recognised raster format", f)
 			continue
 		}
-		files = append(files, f)
+		sets.add(toDir, f)
 	}
 
-	sort.Strings(files)
-	return files, nil
+	sets.sort()
+	return sets, nil
 }
 
-// ListDir returns every file under dir, at any depth.
+// add files f, which must be inside dir, to the group named by its first path
+// segment below dir.
+func (g Grouped) add(dir, f string) {
+	rel, err := filepath.Rel(dir, f)
+	if err != nil {
+		// f came from filepath.Join(dir, ...) or from WalkDir under dir, so
+		// this cannot happen. Grouping it as the default is the harmless
+		// reading if it somehow does.
+		log.Printf("cannot place %s relative to %s: %s", f, dir, err)
+		g[DefaultSet] = append(g[DefaultSet], f)
+		return
+	}
+
+	set := DefaultSet
+	if i := strings.Index(rel, string(os.PathSeparator)); i >= 0 {
+		set = rel[:i]
+	}
+	g[set] = append(g[set], f)
+}
+
+func (g Grouped) sort() {
+	for _, files := range g {
+		sort.Strings(files)
+	}
+}
+
+// ListDir returns every file under dir, at any depth, grouped by the
+// subdirectory it was found in.
 //
 // It recurses because the bucket path does. A bucket key may contain slashes,
 // and Get returns the nested path it downloaded to; a later restart without
 // -download-from re-scans the same directory and has to find the same files.
 // Listing only the top level meant the first boot served nested data and the
 // next one silently served none of it.
-func ListDir(dir string) ([]string, error) {
-	var files []string
+func ListDir(dir string) (Grouped, error) {
+	sets := make(Grouped)
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -77,15 +141,15 @@ func ListDir(dir string) ([]string, error) {
 			return nil
 		}
 		log.Println("serve " + path)
-		files = append(files, path)
+		sets.add(dir, path)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	sort.Strings(files)
-	return files, nil
+	sets.sort()
+	return sets, nil
 }
 
 func download(ctx context.Context, bkt *blob.Bucket, obj *blob.ListObject, toDir string) (string, error) {

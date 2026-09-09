@@ -19,7 +19,7 @@ func main() {
 	upstream := flag.String("upstream", "localhost:5052", "gRPC upstream server address (typically rawdataforecaster)")
 	bucket := flag.String("download-from", "", "Bucket URL to download topography files from (e.g., 'file:///data/topography', 'azblob://...', empty to use -workdir only)")
 	downloadTimeout := flag.Int("download-timeout", 240, "Timeout in seconds for downloading topography files from bucket")
-	workdir := flag.String("workdir", "/data/", "Directory containing topography data files (used if -download-from is empty, or as download destination)")
+	workdir := flag.String("workdir", "/data/", "Directory containing topography data files (used if -download-from is empty, or as download destination). Files at the root are the default topography set; each subdirectory is a named set a request can ask for")
 	port := flag.Int("port", 5051, "gRPC server listen port")
 	stats := flag.Bool("serve-stats", false, "Enable Prometheus metrics endpoint on :8080/metrics")
 
@@ -27,7 +27,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*downloadTimeout)*time.Second)
 	defer cancel()
-	topographyFiles, err := download.Get(ctx, *bucket, *workdir)
+	topography, err := download.Get(ctx, *bucket, *workdir)
 	if err != nil {
 		log.Fatalf("Unable to get topography files: %s", err)
 	}
@@ -37,7 +37,7 @@ func main() {
 	}
 
 	log.Println("ready")
-	log.Fatalln(server.Run(*upstream, *port, topographyFiles))
+	log.Fatalln(server.Run(*upstream, *port, topography))
 }
 
 func serveStats() {
