@@ -269,3 +269,146 @@ func TestStatusFileShape(t *testing.T) {
 		t.Error("expected errors to be omitted when there are none")
 	}
 }
+
+// The state a service publishes has to reach the file, or the whole point of
+// the field is lost: a controller reading only the configuration status cannot
+// tell a service that is working from one that accepted its configuration and
+// has been getting nowhere with it since.
+func TestStatusCarriesServiceState(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+	watcher.State = func() any { return map[string]any{"areas": []string{"group_a"}} }
+
+	if err := watcher.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	state := readRawStatus(t, statusDir)["state"]
+	if state == nil {
+		t.Fatalf("no state in the status file: %+v", readRawStatus(t, statusDir))
+	}
+	areas, ok := state.(map[string]any)["areas"].([]any)
+	if !ok || len(areas) != 1 || areas[0] != "group_a" {
+		t.Errorf("unexpected state: %#v", state)
+	}
+}
+
+// State changes without anybody editing anything, so the file has to be
+// rewritten on a clock as well as on a configuration change. Without this the
+// state in the file is whatever was true at the last edit, which for a service
+// that is configured once and left alone is "at startup, forever".
+func TestStateIsRepublishedWithoutAConfigChange(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+
+	var mutex sync.Mutex
+	loaded := "nothing"
+	watcher.State = func() any {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return map[string]any{"loaded": loaded}
+	}
+	watcher.StateInterval = 5 * time.Millisecond
+
+	if err := watcher.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watcher.Run(ctx)
+
+	mutex.Lock()
+	loaded = "group_a"
+	mutex.Unlock()
+
+	waitFor(t, "the new state to reach the status file", func() bool {
+		state, ok := readRawStatus(t, statusDir)["state"].(map[string]any)
+		return ok && state["loaded"] == "group_a"
+	})
+}
+
+// The clock is only worth having if a quiet service is silent on disk. This
+// file is mirrored up to a bucket, so rewriting it every few seconds with
+// identical contents would turn a status report into a stream of uploads.
+func TestUnchangedStateDoesNotRewriteTheFile(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+	watcher.State = func() any { return map[string]any{"loaded": "group_a"} }
+
+	if err := watcher.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(statusDir, "test.json")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range 5 {
+		watcher.refreshState()
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("the status file was rewritten although nothing had changed")
+	}
+}
+
+// A service that has not finished starting has no state to report, and an
+// empty one would read as a service that is configured to do nothing.
+func TestNilStateIsOmitted(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+	watcher.State = func() any { return nil }
+
+	if err := watcher.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := readRawStatus(t, statusDir)["state"]; ok {
+		t.Error("expected state to be omitted when the service reports none")
+	}
+}
+
+func readRawStatus(t *testing.T, statusDir string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(statusDir, "test.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// Writing only on change must not mean never writing again. A status file
+// removed underneath the process — a recreated volume, a tidied directory —
+// comes back on the next tick, rather than staying missing until somebody
+// happens to edit the configuration.
+func TestAMissingStatusFileIsWrittenAgain(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+	watcher.State = func() any { return map[string]any{"loaded": "group_a"} }
+
+	if err := watcher.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(statusDir, "test.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	watcher.refreshState()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the status file was not restored: %s", err)
+	}
+}

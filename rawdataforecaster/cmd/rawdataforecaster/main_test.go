@@ -118,3 +118,31 @@ func TestPendingRestartPersistsAcrossLaterSaves(t *testing.T) {
 			restored.PendingRestart)
 	}
 }
+
+// Before the first configuration there is no forecaster and so nothing to
+// report. An empty area list would say the process is configured to serve
+// nothing, which is a real state somebody would act on.
+func TestStateIsAbsentBeforeStartup(t *testing.T) {
+	r := &reloader{}
+
+	if state := r.state(); state != nil {
+		t.Errorf("expected no state before startup, got %+v", state)
+	}
+}
+
+// After startup the state names the configured areas and what is resident, so
+// a reader can tell a working configuration from one that merely parsed.
+func TestStateReportsTheConfiguredAreas(t *testing.T) {
+	r := started(t)
+
+	state, ok := r.state().(forecasterState)
+	if !ok {
+		t.Fatalf("unexpected state type: %#v", r.state())
+	}
+	if len(state.Areas) != 1 || state.Areas[0].Area != "group_a" {
+		t.Fatalf("unexpected areas: %+v", state.Areas)
+	}
+	if state.Areas[0].Loaded == nil {
+		t.Error("group_a is loaded but the state does not say so")
+	}
+}

@@ -102,6 +102,44 @@ separately.
 > the process on startup. It is now rejected with an error naming the shape
 > above.
 
+## Status file
+
+`--status-dir` makes the process write `rawdataforecaster.json` there after
+every configuration attempt, and every 15 seconds while its state changes. The
+file is written by rename, so a reader never sees half of one.
+
+```json
+{
+  "module": "rawdataforecaster",
+  "loaded_sha": "9f86d0…",
+  "loaded_at": "2026-09-09T17:00:00Z",
+  "ok": true,
+  "applied": ["areas"],
+  "state": {
+    "areas": [
+      {"area": "nordic", "available": 178891200015, "loaded": 178891200015},
+      {"area": "arctic", "available": 178891200015, "loaded": null},
+      {"area": "world",  "available": null,         "loaded": null}
+    ]
+  }
+}
+```
+
+Everything above `state` describes the configuration file: which one was read
+and whether it was accepted. `state` describes the process, and answers the
+question the rest cannot — a configuration applies just as cleanly when the
+areas it names are not being served.
+
+Each area reports `available`, the version the store's `latest/` marker names,
+and `loaded`, the version being served. Both are `null` when there is none, so
+the three cases above read directly: `nordic` is serving what the store
+offers, `arctic` has data waiting that it has not managed to download, and
+`world` has never been published at all. A `loaded` behind an `available` for
+more than a few minutes is the same problem as `arctic`'s, caught earlier.
+
+Only configured areas appear. An area in the store that this process was not
+asked to serve is not its business.
+
 ## Native dependencies
 
 The geographic index uses [s2geometry](https://github.com/google/s2geometry) and [PROJ](https://proj.org/) via CGo. These are pre-installed in the devcontainer; building outside it requires both libraries.

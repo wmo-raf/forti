@@ -7,11 +7,16 @@
 // the configuration already in use — the service keeps serving what it has and
 // records the reason in its status file.
 //
+// A service may also publish live state alongside the configuration status —
+// see Watcher.State. The two answer different questions: the status says which
+// file was accepted, the state says what the service is doing with it.
+//
 // The filesystem is the whole interface: nothing here opens a socket, and the
 // controller needs no way to reach the service.
 package configwatch
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -27,6 +32,12 @@ import (
 // few times a week, so this only needs to feel immediate to whoever clicked
 // Save.
 const DefaultInterval = time.Second
+
+// DefaultStateInterval is how often a Watcher rewrites its status file to keep
+// Watcher.State fresh. Unlike the configuration, state changes without anybody
+// editing anything, so it has to be republished on a clock. Unchanged state is
+// not rewritten, so this costs one marshal and one comparison.
+const DefaultStateInterval = 15 * time.Second
 
 // Result is what a service made of a configuration file.
 type Result struct {
@@ -61,6 +72,12 @@ type Status struct {
 	Errors         []string  `json:"errors,omitempty"`
 	Applied        []string  `json:"applied,omitempty"`
 	PendingRestart []string  `json:"pending_restart,omitempty"`
+
+	// State is whatever Watcher.State returned, or nil if the service
+	// publishes none. It is deliberately untyped here: this package knows
+	// when to write a status file and nothing at all about what a particular
+	// service does.
+	State any `json:"state,omitempty"`
 }
 
 // A Watcher applies one configuration file whenever its contents change.
@@ -75,9 +92,39 @@ type Watcher struct {
 	Interval  time.Duration
 	Apply     Applier
 
+	// State, if set, is called for whatever the service wants to publish
+	// about itself, and its result is recorded under "state". Returning nil
+	// omits the field, which is what a service that has not finished starting
+	// should do.
+	//
+	// It exists because an applied configuration is not evidence that the
+	// configuration is working. A service that accepted a file naming three
+	// datasets and has been failing to download one of them for six hours has
+	// exactly the same status as one serving all three. Only the service can
+	// tell them apart, and without this the difference reaches nobody.
+	//
+	// It is called on the Watcher's goroutine while no lock of this package's
+	// is held, and must be safe to call at any time.
+	State func() any
+
+	// StateInterval is how often the status file is rewritten so State stays
+	// current. The zero value means DefaultStateInterval.
+	StateInterval time.Duration
+
 	lastSHA  string
 	lastSize int64
 	lastMod  time.Time
+
+	// last is the status as last built, so the periodic rewrite can refresh
+	// State without having to restate what the configuration did; lastWritten
+	// is the bytes that reached disk, so a rewrite that would change nothing
+	// does not touch the file.
+	//
+	// Neither is guarded, like the fields above: Load and Run are the only
+	// writers and the package already requires Load to finish before Run
+	// starts.
+	last        Status
+	lastWritten []byte
 }
 
 // Load reads and applies the file once, and writes the status file. It is how
@@ -107,8 +154,16 @@ func (w *Watcher) Run(ctx context.Context) {
 		interval = DefaultInterval
 	}
 
+	stateInterval := w.StateInterval
+	if stateInterval <= 0 {
+		stateInterval = DefaultStateInterval
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	stateTicker := time.NewTicker(stateInterval)
+	defer stateTicker.Stop()
 
 	for {
 		select {
@@ -124,8 +179,30 @@ func (w *Watcher) Run(ctx context.Context) {
 				// next write is usually the fix.
 				log.Printf("config %s not applied: %s", w.Path, err)
 			}
+		case <-stateTicker.C:
+			w.refreshState()
 		}
 	}
+}
+
+// refreshState rewrites the status file with current state, leaving everything
+// the last configuration attempt reported as it was. A service whose state has
+// not moved writes nothing, so an idle process leaves the file's modification
+// time alone and whatever mirrors it up has nothing to do.
+func (w *Watcher) refreshState() {
+	if w.State == nil || w.StatusDir == "" {
+		return
+	}
+
+	// A status file that has gone missing — a recreated volume, a tidied
+	// directory — is put back. Without this the write-only-on-change rule
+	// would keep it missing until somebody edited the configuration, which is
+	// the same silently-stale failure this whole file exists to report.
+	if _, err := os.Stat(filepath.Join(w.StatusDir, w.Module+".json")); err != nil {
+		w.lastWritten = nil
+	}
+
+	w.report(w.last)
 }
 
 // readIfChanged returns the file contents, and whether they differ from what
@@ -194,26 +271,42 @@ func (w *Watcher) apply(data []byte) error {
 	return nil
 }
 
-// report writes the status file. A service that cannot write its status is
-// still a working service, so this only logs.
+// report writes the status file, filling in current state. A service that
+// cannot write its status is still a working service, so this only logs.
+//
+// The status is remembered whether or not it is written, so that a later state
+// refresh republishes it rather than an empty one.
 func (w *Watcher) report(status Status) {
+	w.last = status
 	if w.StatusDir == "" {
 		return
 	}
-	if err := writeJSONFile(filepath.Join(w.StatusDir, w.Module+".json"), status); err != nil {
-		log.Printf("unable to write status file: %s", err)
+	if w.State != nil {
+		status.State = w.State()
 	}
-}
 
-// writeJSONFile writes to a temporary file and renames it into place, so a
-// reader never sees a half-written file.
-func writeJSONFile(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
-		return err
+		log.Printf("unable to encode status: %s", err)
+		return
 	}
 	data = append(data, '\n')
 
+	// Written only when something changed, so the periodic state refresh is
+	// free for a service that is doing what it was doing a minute ago.
+	if bytes.Equal(data, w.lastWritten) {
+		return
+	}
+	if err := writeFile(filepath.Join(w.StatusDir, w.Module+".json"), data); err != nil {
+		log.Printf("unable to write status file: %s", err)
+		return
+	}
+	w.lastWritten = data
+}
+
+// writeFile writes to a temporary file and renames it into place, so a reader
+// never sees a half-written file.
+func writeFile(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
 	if err != nil {
 		return err

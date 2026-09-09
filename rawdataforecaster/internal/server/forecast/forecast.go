@@ -24,7 +24,14 @@ type Forecast struct {
 	cfg *config.Configuration
 
 	datasets map[string]*dataset.Dataset
-	m        sync.RWMutex
+
+	// available is the last listing of the bucket's latest/ markers, kept so
+	// AreaStatus can say what the store is offering as well as what is
+	// loaded. It covers the whole bucket, not just the configured areas: it
+	// is what update read, filtered on the way out rather than on the way in.
+	available map[string]int
+
+	m sync.RWMutex
 }
 
 // New initializes an object that can be queries for forecasts. It is self-updating.
@@ -46,9 +53,10 @@ func New(cfg *config.Configuration) (*Forecast, error) {
 
 func newFromClient(store internalformat.Client, cfg *config.Configuration) (*Forecast, error) {
 	f := &Forecast{
-		store:    store,
-		cfg:      cfg,
-		datasets: make(map[string]*dataset.Dataset),
+		store:     store,
+		cfg:       cfg,
+		datasets:  make(map[string]*dataset.Dataset),
+		available: make(map[string]int),
 	}
 
 	if err := f.update(); err != nil {
@@ -235,8 +243,13 @@ func (f *Forecast) update() error {
 	// One snapshot for the whole round, threaded down rather than read again
 	// inside load: the configuration can be replaced at any moment, and a
 	// download that read it twice could use two different loaders.
-	f.m.RLock()
+	//
+	// The write lock rather than the read lock, because the listing is kept:
+	// it is the only place the process learns what the store is offering, and
+	// AreaStatus reports it against what is actually resident.
+	f.m.Lock()
 	cfg := f.cfg
+	f.available = latest
 	toAdd := make(map[string]int)
 	for _, area := range cfg.Areas {
 		// A configured area with no marker has never published, which is an
@@ -257,7 +270,7 @@ func (f *Forecast) update() error {
 			toAdd[area] = latestVersion
 		}
 	}
-	f.m.RUnlock()
+	f.m.Unlock()
 
 	errs := make(chan error)
 	for area, version := range toAdd {
@@ -334,4 +347,52 @@ func (f *Forecast) load(ctx context.Context, cfg *config.Configuration, area str
 	log.Printf("active: %s/%d", area, version)
 
 	return nil
+}
+
+// AreaStatus is what one configured area is doing, for the status file.
+//
+// Both versions are pointers so that "there is no marker" and "there is
+// nothing loaded" are their own values rather than a zero that has to be
+// interpreted — the same distinction update needs, and for the same reason.
+// The three states a reader cares about fall out of the pair: nothing
+// published, published but not resident, and resident at some version which
+// may or may not be the version on offer.
+type AreaStatus struct {
+	Area string `json:"area"`
+
+	// Available is the version latest/ names, or nil if there is no marker.
+	Available *int `json:"available"`
+
+	// Loaded is the version being served, or nil if nothing is resident.
+	Loaded *int `json:"loaded"`
+}
+
+// AreaStatus reports every configured area, in the order the configuration
+// lists them.
+//
+// It exists because an applied configuration is not evidence of a working one.
+// The process holds this already — it is what update decides from, and what
+// the fortiActiveLatest and fortiAvailableLatest gauges expose — but only to
+// a Prometheus scrape, which not every deployment runs.
+//
+// Configured areas only: an area in the bucket that nobody asked for is not
+// this process's business, and one that was asked for and is missing is
+// exactly what a reader is looking for.
+func (f *Forecast) AreaStatus() []AreaStatus {
+	f.m.RLock()
+	defer f.m.RUnlock()
+
+	status := make([]AreaStatus, 0, len(f.cfg.Areas))
+	for _, area := range f.cfg.Areas {
+		s := AreaStatus{Area: area}
+		if available, published := f.available[area]; published {
+			s.Available = &available
+		}
+		if ds, resident := f.datasets[area]; resident {
+			loaded := ds.Meta.Version
+			s.Loaded = &loaded
+		}
+		status = append(status, s)
+	}
+	return status
 }
