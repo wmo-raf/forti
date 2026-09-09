@@ -162,6 +162,20 @@ func getForecastRequest(cfg *config.Elements, r *http.Request) (*internalprotoco
 	location := internalprotocol.GetForecastRequest{
 		Latitude:  latitude,
 		Longitude: longitude,
+		// Both repeat and both keep their order, and both are forwarded
+		// verbatim: which areas exist and which topography sets exist are
+		// facts about the upstream, not about this process, so validating
+		// them here would only duplicate a check that has to happen there
+		// anyway and would go stale on the next reload.
+		//
+		// Absent means absent. q["area"] is nil when the parameter was not
+		// given, which is the empty filter the upstream reads as "no
+		// narrowing" -- and "?area=" is one name that happens to be empty,
+		// which matches nothing. The distinction is the point: a filter that
+		// silently widened on a mistyped name would be worse than no filter,
+		// because it would look like it was working.
+		Areas:      q["area"],
+		Topography: q["topography"],
 	}
 
 	if !cfg.SkipAltitude {

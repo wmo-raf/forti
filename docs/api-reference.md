@@ -15,6 +15,8 @@ Returns a point forecast for the specified location.
 | `lat` | float | Yes | -90 to 90 | Latitude in decimal degrees |
 | `lon` | float | Yes | -180 to 180 | Longitude in decimal degrees |
 | `altitude` | float | No | -500 to 9000 | Ground surface height above sea level in meters. When omitted, the internal topography model is used for temperature correction. |
+| `area` | string | No | | Name of a model area that may answer. Repeatable. When omitted, the nearest gridpoint across every loaded area answers. |
+| `topography` | string | No | | Name of a topography set to consult for ground elevation. Repeatable, and consulted in the order given. When omitted, the default set is used. |
 
 **Example Request:**
 
@@ -27,6 +29,59 @@ curl 'http://localhost:8080/?lat=59.93&lon=10.72'
 ```bash
 curl 'http://localhost:8080/?lat=59.93&lon=10.72&altitude=90'
 ```
+
+**Example selecting an area and a topography set:**
+
+```bash
+curl 'http://localhost:8080/?lat=59.93&lon=10.72&area=meps&topography=consumer-a'
+```
+
+### Selecting an area
+
+By default the forecast comes from whichever loaded area has the nearest
+gridpoint to the requested location, so a point covered by both a coarse
+wide-domain model and a finer national one is answered by the finer one.
+
+`area` narrows that choice to the areas named, and the nearest gridpoint among
+*those* answers. It can only narrow: it cannot make the service load an area,
+or reach one it was not configured with.
+
+Naming an area the service does not have loaded matches nothing, and a request
+that matches nothing gets `OutsideAllGrids` — outside all the grids it asked
+for. A mistyped name therefore fails rather than quietly falling back to the
+wider set, which would look like the parameter was working when it was not.
+
+Which area answered is carried on the internal gRPC response but is **not**
+part of this JSON format, so an HTTP caller cannot yet check that the
+constraint held except by inferring it from the returned grid coordinates.
+
+### Selecting topography
+
+Ground elevation for the temperature correction comes from a default set of
+elevation rasters. A deployment may group further sets into subdirectories of
+the topography work directory, one per name.
+
+`topography` names the sets to consult, in order, before the default set. A set
+that has no data at the requested point falls through to the next one and
+finally to the default, so a set need only carry the ground it improves on.
+
+Naming a set that does not exist yields no elevation data at all, and the
+forecast is returned **uncorrected** — the same as at a point no elevation data
+covers. It does not fall back to the default set, because a caller could not
+tell that it had.
+
+### These are not tenancy boundaries
+
+Both parameters express a caller's intent. Whether that intent is right is the
+caller's responsibility: a caller that computes the wrong list gets a plausible
+forecast from the wrong area, or an uncorrected one, with no error anywhere —
+and over this JSON API, no way to tell from the response that it happened.
+That is a materially weaker property than running one service per group of
+areas, where a caller bug is a connection failure rather than wrong data.
+
+They exist for deployments that have chosen to share one process across
+independent consumers. A deployment that runs a process per consumer needs
+neither.
 
 ## Response Format
 
