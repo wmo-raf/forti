@@ -57,8 +57,9 @@ Topography files can be in any raster format readable by GDAL (GeoTIFF, NetCDF, 
 Only files with a recognised raster extension are loaded, so sidecars and
 documentation can sit alongside the data without stopping the service:
 
-`.asc` `.bil` `.bt` `.dem` `.dt0` `.dt1` `.dt2` `.grd` `.gtx` `.h5` `.hdf`
-`.hdf5` `.hgt` `.img` `.nc` `.nc4` `.tif` `.tiff` `.vrt`
+`.asc` `.bil` `.bt` `.dem` `.dt0` `.dt1` `.dt2` `.grb` `.grb2` `.grd` `.grib`
+`.grib2` `.gtx` `.h5` `.hdf` `.hdf5` `.hgt` `.img` `.jp2` `.nc` `.nc4` `.rst`
+`.sdat` `.tif` `.tiff` `.vrt`
 
 Every skipped file is logged. A raster in a format not on this list is skipped
 too, and the only symptom is an uncorrected forecast — so if a file is missing

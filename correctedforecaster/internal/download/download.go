@@ -31,10 +31,9 @@ const DefaultSet = ""
 // than across the whole directory.
 type Grouped map[string][]string
 
-// All returns every file in every group, the default set first and the named
-// sets after it in name order. For a directory with no subdirectories this is
-// exactly the flat list that Get used to return.
-func (g Grouped) All() []string {
+// Names returns the named sets, in name order. The default set is not one of
+// them: it has no name to ask for, and is reached by asking for nothing.
+func (g Grouped) Names() []string {
 	names := make([]string, 0, len(g))
 	for name := range g {
 		if name != DefaultSet {
@@ -42,9 +41,15 @@ func (g Grouped) All() []string {
 		}
 	}
 	sort.Strings(names)
+	return names
+}
 
+// All returns every file in every group, the default set first and the named
+// sets after it in name order. For a directory with no subdirectories this is
+// exactly the flat list that Get used to return.
+func (g Grouped) All() []string {
 	files := append([]string(nil), g[DefaultSet]...)
-	for _, name := range names {
+	for _, name := range g.Names() {
 		files = append(files, g[name]...)
 	}
 	return files
@@ -180,13 +185,20 @@ func download(ctx context.Context, bkt *blob.Bucket, obj *blob.ListObject, toDir
 		if err != nil {
 			return "", err
 		}
-		defer f.Close()
 		r, err := bkt.NewReader(ctx, obj.Key, nil)
 		if err != nil {
+			f.Close()
 			return "", err
 		}
 		defer r.Close()
 		if _, err := io.Copy(f, r); err != nil {
+			f.Close()
+			return "", err
+		}
+		// Closed rather than deferred, and its error reported: a failure to
+		// flush leaves a short file on disk, and calling that a successful
+		// download would hand GDAL a truncated raster at the next startup.
+		if err := f.Close(); err != nil {
 			return "", err
 		}
 		return filename, nil
@@ -222,25 +234,32 @@ func fileWithinDir(file, dir string) bool {
 // uncorrected forecast. That is why the list is generous and why every skip
 // is logged. Add to it rather than working around it.
 var rasterExtensions = map[string]bool{
-	".asc":  true, // ESRI ASCII grid
-	".bil":  true, // band interleaved by line
-	".bt":   true, // VTP binary terrain
-	".dem":  true, // USGS DEM
-	".dt0":  true, // DTED, three levels
-	".dt1":  true,
-	".dt2":  true,
-	".grd":  true, // Surfer / GMT grid
-	".gtx":  true, // NOAA vertical datum grid
-	".h5":   true, // HDF5
-	".hdf":  true,
-	".hdf5": true,
-	".hgt":  true, // SRTM
-	".img":  true, // ERDAS Imagine
-	".nc":   true, // NetCDF
-	".nc4":  true,
-	".tif":  true, // GeoTIFF
-	".tiff": true,
-	".vrt":  true, // GDAL virtual dataset
+	".asc":   true, // ESRI ASCII grid
+	".bil":   true, // band interleaved by line
+	".bt":    true, // VTP binary terrain
+	".dem":   true, // USGS DEM
+	".dt0":   true, // DTED, three levels
+	".dt1":   true,
+	".dt2":   true,
+	".grd":   true, // Surfer / GMT grid
+	".gtx":   true, // NOAA vertical datum grid
+	".h5":    true, // HDF5
+	".hdf":   true,
+	".hdf5":  true,
+	".grb":   true, // GRIB, both editions and both spellings
+	".grb2":  true,
+	".grib":  true,
+	".grib2": true,
+	".hgt":   true, // SRTM
+	".img":   true, // ERDAS Imagine
+	".jp2":   true, // JPEG 2000
+	".nc":    true, // NetCDF
+	".nc4":   true,
+	".rst":   true, // Idrisi raster
+	".sdat":  true, // SAGA GIS binary grid
+	".tif":   true, // GeoTIFF
+	".tiff":  true,
+	".vrt":   true, // GDAL virtual dataset
 }
 
 // isRaster reports whether the given file looks like something GDAL can open
