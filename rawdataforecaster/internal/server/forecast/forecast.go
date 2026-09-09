@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -26,10 +27,14 @@ type Forecast struct {
 	datasets map[string]*dataset.Dataset
 
 	// available is the last listing of the bucket's latest/ markers, kept so
-	// AreaStatus can say what the store is offering as well as what is
-	// loaded. It covers the whole bucket, not just the configured areas: it
-	// is what update read, filtered on the way out rather than on the way in.
-	available map[string]int
+	// Status can say what the store is offering as well as what is loaded.
+	// It covers the whole bucket, not just the configured areas: it is what
+	// update read, filtered on the way out rather than on the way in.
+	//
+	// It does not decay, so listingErr records whether the listing behind it
+	// is the current one or the last one that worked.
+	available  map[string]int
+	listingErr error
 
 	m sync.RWMutex
 }
@@ -244,6 +249,14 @@ func (f *Forecast) update() error {
 
 	latest, err := f.store.Latest(ctx)
 	if err != nil {
+		// Remembered, not merely returned. available keeps the last listing
+		// that worked, so a store that has become unreachable would otherwise
+		// read in the status file as every area serving exactly what is on
+		// offer — the healthiest possible report of the one failure that
+		// stops every area ever being updated again.
+		f.m.Lock()
+		f.listingErr = err
+		f.m.Unlock()
 		return err
 	}
 
@@ -256,7 +269,11 @@ func (f *Forecast) update() error {
 	// AreaStatus reports it against what is actually resident.
 	f.m.Lock()
 	cfg := f.cfg
-	f.available = latest
+	// Copied rather than retained. Client is an interface, and one that
+	// cached or reused its listing would otherwise be handing this a map it
+	// goes on writing to, read here under a lock it knows nothing about.
+	f.available = maps.Clone(latest)
+	f.listingErr = nil
 	toAdd := make(map[string]int)
 	for _, area := range cfg.Areas {
 		// A configured area with no marker has never published, which is an
@@ -380,8 +397,20 @@ type AreaStatus struct {
 	Loaded *int `json:"loaded"`
 }
 
-// AreaStatus reports every configured area, in the order the configuration
-// lists them.
+// Status is what the process is doing, for the status file.
+type Status struct {
+	// StoreError is the last failure to list the store's markers, empty if
+	// the last listing succeeded. It has to be here because Available below
+	// does not decay: it is the last listing that worked, so without this a
+	// store nobody can reach any more is indistinguishable from one holding
+	// exactly what is loaded.
+	StoreError string `json:"store_error,omitempty"`
+
+	Areas []AreaStatus `json:"areas"`
+}
+
+// Status reports every configured area, in the order the configuration lists
+// them, and whether the store behind those figures is still answering.
 //
 // It exists because an applied configuration is not evidence of a working one.
 // The process holds this already — it is what update decides from, and what
@@ -391,11 +420,14 @@ type AreaStatus struct {
 // Configured areas only: an area in the bucket that nobody asked for is not
 // this process's business, and one that was asked for and is missing is
 // exactly what a reader is looking for.
-func (f *Forecast) AreaStatus() []AreaStatus {
+func (f *Forecast) Status() Status {
 	f.m.RLock()
 	defer f.m.RUnlock()
 
-	status := make([]AreaStatus, 0, len(f.cfg.Areas))
+	status := Status{Areas: make([]AreaStatus, 0, len(f.cfg.Areas))}
+	if f.listingErr != nil {
+		status.StoreError = f.listingErr.Error()
+	}
 	for _, area := range f.cfg.Areas {
 		s := AreaStatus{Area: area}
 		if available, published := f.available[area]; published {
@@ -405,7 +437,7 @@ func (f *Forecast) AreaStatus() []AreaStatus {
 			loaded := ds.Meta.Version
 			s.Loaded = &loaded
 		}
-		status = append(status, s)
+		status.Areas = append(status.Areas, s)
 	}
 	return status
 }

@@ -116,30 +116,25 @@ func (r *reloader) apply(data []byte) configwatch.Result {
 	}
 }
 
-// forecasterState is the "state" object in the status file: what this process
-// is serving, as against what configuration it last accepted.
+// state is the "state" object in the status file: what this process is
+// serving, as against what configuration it last accepted.
 //
 // The two are not the same question and the second does not answer the first.
 // A file naming three areas applies just as cleanly when one of them has never
 // published and another has been failing to download since the last run, and
 // until this went into the status file that difference reached nobody without
 // a Prometheus scrape.
-type forecasterState struct {
-	Areas []forecast.AreaStatus `json:"areas"`
-}
-
-// state reports what the forecaster holds, or nothing at all before the first
-// configuration has built one.
 //
-// Nil rather than an empty list on purpose: an empty Areas would say this
-// process is configured to serve nothing, which is a real and different state
-// and one somebody would rightly act on.
+// Nil before the first configuration has built a forecaster. Nil rather than
+// an empty list on purpose: an empty area list would say this process is
+// configured to serve nothing, which is a real and different state, and one
+// somebody would rightly act on.
 func (r *reloader) state() any {
 	forecaster := r.running()
 	if forecaster == nil {
 		return nil
 	}
-	return forecasterState{Areas: forecaster.AreaStatus()}
+	return forecaster.Status()
 }
 
 func serveStats() {

@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/metno/forti/rawdataforecaster/internal/server/forecast"
 )
 
 // testData is the bucket URL of the checked-in sample datasets.
@@ -135,7 +137,7 @@ func TestStateIsAbsentBeforeStartup(t *testing.T) {
 func TestStateReportsTheConfiguredAreas(t *testing.T) {
 	r := started(t)
 
-	state, ok := r.state().(forecasterState)
+	state, ok := r.state().(forecast.Status)
 	if !ok {
 		t.Fatalf("unexpected state type: %#v", r.state())
 	}

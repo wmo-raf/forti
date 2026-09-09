@@ -2,24 +2,28 @@ package forecast
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log"
 	"os"
 	"strings"
 	"testing"
+
+	internalformat "github.com/metno/forti-internalformat"
 )
 
 func statusFor(t *testing.T, f *Forecast, area string) AreaStatus {
 	t.Helper()
-	for _, status := range f.AreaStatus() {
+	for _, status := range f.Status().Areas {
 		if status.Area == area {
 			return status
 		}
 	}
-	t.Fatalf("%q is not in the status: %+v", area, f.AreaStatus())
+	t.Fatalf("%q is not in the status: %+v", area, f.Status().Areas)
 	return AreaStatus{}
 }
 
-func version(t *testing.T, v *int) int {
+func mustVersion(t *testing.T, v *int) int {
 	t.Helper()
 	if v == nil {
 		t.Fatal("expected a version, got none")
@@ -37,10 +41,10 @@ func TestAreaStatusReportsWhatIsResident(t *testing.T) {
 	}
 
 	served := statusFor(t, f, "group_a")
-	if got := version(t, served.Available); got != 1 {
+	if got := mustVersion(t, served.Available); got != 1 {
 		t.Errorf("group_a available: got %d, want 1", got)
 	}
-	if got := version(t, served.Loaded); got != 1 {
+	if got := mustVersion(t, served.Loaded); got != 1 {
 		t.Errorf("group_a loaded: got %d, want 1", got)
 	}
 
@@ -68,7 +72,7 @@ func TestAreaStatusShowsAPublishedAreaThatIsNotLoaded(t *testing.T) {
 	}
 
 	dangling := statusFor(t, f, "dangling")
-	if got := version(t, dangling.Available); got != 3 {
+	if got := mustVersion(t, dangling.Available); got != 3 {
 		t.Errorf("dangling available: got %d, want 3", got)
 	}
 	if dangling.Loaded != nil {
@@ -84,11 +88,11 @@ func TestAreaStatusFollowsTheConfiguration(t *testing.T) {
 
 	f.SetConfig(testConfig("group_a"))
 
-	if len(f.AreaStatus()) != 1 {
-		t.Fatalf("expected one area, got %+v", f.AreaStatus())
+	if len(f.Status().Areas) != 1 {
+		t.Fatalf("expected one area, got %+v", f.Status().Areas)
 	}
-	if f.AreaStatus()[0].Area != "group_a" {
-		t.Errorf("unexpected area: %+v", f.AreaStatus())
+	if f.Status().Areas[0].Area != "group_a" {
+		t.Errorf("unexpected area: %+v", f.Status().Areas)
 	}
 }
 
@@ -121,4 +125,62 @@ func TestUpdateLogsTheAreaThatActuallyFailed(t *testing.T) {
 			t.Errorf("an area that loaded was blamed for the failure:\n%s", logged.String())
 		}
 	}
+}
+
+// A store nobody can reach any more is the one failure that stops every area
+// ever being updated again, and it is the one the area list cannot show:
+// Available is the last listing that worked, so on its own the report gets
+// healthier the longer the outage lasts.
+func TestStatusReportsAStoreItCannotList(t *testing.T) {
+	f := testForecast(t, "group_a")
+
+	if store := f.Status().StoreError; store != "" {
+		t.Fatalf("a working store reported %q", store)
+	}
+
+	f.store = unreachableStore{}
+	if err := f.update(); err == nil {
+		t.Fatal("expected the listing to fail")
+	}
+
+	status := f.Status()
+	if status.StoreError == "" {
+		t.Error("the status does not say the store could not be listed")
+	}
+	// The area keeps serving and keeps reporting what it has. Losing the
+	// listing is not losing the data.
+	if got := mustVersion(t, status.Areas[0].Loaded); got != 1 {
+		t.Errorf("group_a loaded: got %d, want 1", got)
+	}
+}
+
+// And it clears when the store comes back, or the first blip would read as an
+// outage for the life of the process.
+func TestStatusClearsAStoreErrorOnceListingWorks(t *testing.T) {
+	f := testForecast(t, "group_a")
+	working := f.store
+
+	f.store = unreachableStore{}
+	if err := f.update(); err == nil {
+		t.Fatal("expected the listing to fail")
+	}
+
+	f.store = working
+	if err := f.update(); err != nil {
+		t.Fatal(err)
+	}
+
+	if store := f.Status().StoreError; store != "" {
+		t.Errorf("the store error outlived the outage: %q", store)
+	}
+}
+
+// unreachableStore is a client whose bucket has gone away. Only Latest is
+// reached: update gives up on it before it asks for anything else.
+type unreachableStore struct {
+	internalformat.Client
+}
+
+func (unreachableStore) Latest(context.Context) (map[string]int, error) {
+	return nil, errors.New("dial tcp: connection refused")
 }

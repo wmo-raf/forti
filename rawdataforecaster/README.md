@@ -130,12 +130,18 @@ and whether it was accepted. `state` describes the process, and answers the
 question the rest cannot — a configuration applies just as cleanly when the
 areas it names are not being served.
 
-Each area reports `available`, the version the store's `latest/` marker names,
-and `loaded`, the version being served. Both are `null` when there is none, so
+Each area reports `available`, the version the store's `latest/` marker named
+at the last successful listing, and `loaded`, the version being served. Both are `null` when there is none, so
 the three cases above read directly: `nordic` is serving what the store
 offers, `arctic` has data waiting that it has not managed to download, and
 `world` has never been published at all. A `loaded` behind an `available` for
 more than a few minutes is the same problem as `arctic`'s, caught earlier.
+
+`available` does not decay, so a `store_error` appears alongside `areas`
+whenever the last attempt to list the store failed. Without it a bucket that
+has become unreachable would read as every area serving exactly what is on
+offer — the healthiest possible report of the one failure that stops any area
+ever being updated again.
 
 Only configured areas appear. An area in the store that this process was not
 asked to serve is not its business.
