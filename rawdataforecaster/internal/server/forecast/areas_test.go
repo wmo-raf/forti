@@ -23,8 +23,8 @@ func TestGetWithNoFilterSelectsGlobally(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get with filter %#v: %s", filter, err)
 		}
-		if data.Meta.Area != "group_b" {
-			t.Errorf("filter %#v: answered by %q, want the nearest area group_b", filter, data.Meta.Area)
+		if data.Area != "group_b" {
+			t.Errorf("filter %#v: answered by %q, want the nearest area group_b", filter, data.Area)
 		}
 	}
 }
@@ -38,16 +38,16 @@ func TestGetFilterPrefersNamedAreaOverNearerUnnamedOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unfiltered.Meta.Area != "group_b" {
-		t.Fatalf("fixture moved: %q answers 59,11 unfiltered", unfiltered.Meta.Area)
+	if unfiltered.Area != "group_b" {
+		t.Fatalf("fixture moved: %q answers 59,11 unfiltered", unfiltered.Area)
 	}
 
 	filtered, err := f.Get(nearGroupBLat, nearGroupBLon, []string{"group_a"})
 	if err != nil {
 		t.Fatalf("Get: %s", err)
 	}
-	if filtered.Meta.Area != "group_a" {
-		t.Errorf("answered by %q, want the named group_a", filtered.Meta.Area)
+	if filtered.Area != "group_a" {
+		t.Errorf("answered by %q, want the named group_a", filtered.Area)
 	}
 }
 
@@ -61,8 +61,8 @@ func TestGetFilterStillPicksNearestAmongNamedAreas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %s", err)
 	}
-	if data.Meta.Area != "group_b" {
-		t.Errorf("answered by %q, want the nearer group_b", data.Meta.Area)
+	if data.Area != "group_b" {
+		t.Errorf("answered by %q, want the nearer group_b", data.Area)
 	}
 }
 

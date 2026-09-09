@@ -8,8 +8,14 @@ import (
 
 // LocationData is a struct for holding timeseries data and metadata for a single location from a specific dataset.
 type LocationData struct {
-	Meta         *Meta
-	Data         []values.LocationDataCollection
+	Meta *Meta
+	Data []values.LocationDataCollection
+
+	// Area is the name the answering dataset is configured and requested
+	// under, which is not necessarily Meta.Area: that one comes from the
+	// dataset's own metadata and nothing checks the two agree.
+	Area string
+
 	GridLocation Location
 }
 

@@ -120,7 +120,7 @@ func (s *forecastServer) GetForecast(ctx context.Context, in *internalprotocol.G
 			// asked for are the areas it got. Only set here: the two failure
 			// responses above never reached a dataset, and saying nothing
 			// answered is the honest thing for them to report.
-			Area: locationData.Meta.Area,
+			Area: locationData.Area,
 		},
 		ParameterMeta: parameterMeta,
 		Data:          values,

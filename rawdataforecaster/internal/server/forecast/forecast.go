@@ -87,24 +87,35 @@ func (f *Forecast) Get(latitude, longitude float32, areas []string) (*dataset.Lo
 		return nil, err
 	}
 
-	areaCounter.With(prometheus.Labels{"area": best.D.Meta.Area}).Inc()
+	areaCounter.With(prometheus.Labels{"area": best.Area}).Inc()
 
 	locationData, err := best.D.Read(latitude, longitude)
 	if err != nil {
 		return nil, err
 	}
 	locationData.GridLocation = best.GridLocation
+	locationData.Area = best.Area
 
 	return locationData, nil
 }
 
 type bestDataset struct {
-	D            *dataset.Dataset
+	D *dataset.Dataset
+
+	// Area is the key the dataset is held under, which is the name the
+	// configuration listed and so the name a request filters on. Meta.Area is
+	// a different string: it is read from the dataset's own complete.json and
+	// nothing checks the two agree. Reporting the key back means the answer a
+	// caller audits is the same name it asked for, even if the stored
+	// metadata is mislabelled.
+	Area string
+
 	GridLocation dataset.Location
 }
 
 func (f *Forecast) bestArea(latitude, longitude float32, areas []string) (*bestDataset, error) {
 	var selected *dataset.Dataset
+	var selectedName string
 	var selectedLocation *lookup.GeoResponse
 	for name, area := range f.datasets {
 		if !selects(areas, name) {
@@ -116,6 +127,7 @@ func (f *Forecast) bestArea(latitude, longitude float32, areas []string) (*bestD
 		}
 		if selectedLocation == nil || closestLocation.Distance < selectedLocation.Distance {
 			selected = area
+			selectedName = name
 			selectedLocation = closestLocation
 		}
 	}
@@ -140,10 +152,13 @@ func (f *Forecast) bestArea(latitude, longitude float32, areas []string) (*bestD
 		return nil, ErrPointTooFarAway
 	}
 
-	distanceHistogram.With(prometheus.Labels{"area": selected.Meta.Area}).Observe(float64(selectedLocation.Distance))
+	distanceHistogram.With(prometheus.Labels{"area": selectedName}).Observe(float64(selectedLocation.Distance))
 
-	return &bestDataset{selected,
-		dataset.Location{Lat: selectedLocation.Lat, Long: selectedLocation.Long}}, nil
+	return &bestDataset{
+		D:            selected,
+		Area:         selectedName,
+		GridLocation: dataset.Location{Lat: selectedLocation.Lat, Long: selectedLocation.Long},
+	}, nil
 }
 
 // selects reports whether an area may answer a request narrowed to filter.
