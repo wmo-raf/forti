@@ -136,6 +136,25 @@ func TestLookupUnknownSetFindsNothing(t *testing.T) {
 	}
 }
 
+// One unrecognised name takes the recognised ones with it. Skipping just the
+// unknown one would answer ["consumer-a", "nope"] exactly like
+// ["consumer-a"], which is the "ignore unknown names" behaviour the design
+// rejects -- a typo that leaves no trace whenever the sets that did resolve
+// happen to cover the point.
+func TestLookupUnknownSetDiscardsTheKnownOnesWithIt(t *testing.T) {
+	s := testServer(t)
+
+	// consumer-a covers Oslo, so skipping "nope" would have found 500 here.
+	if got := altitudeAt(t, s, []string{"consumer-a", "nope"}, osloLat, osloLon); got != nil {
+		t.Errorf("got %v, want nothing at all", *got)
+	}
+	// And the same names without the typo do find it, so the test above is
+	// not just describing a lookup that could never have succeeded.
+	if got := altitudeAt(t, s, []string{"consumer-a"}, osloLat, osloLon); got == nil || *got != 500 {
+		t.Errorf("got %v, want consumer-a's 500", got)
+	}
+}
+
 // A point no set covers finds nothing, which is the case the unknown-set
 // decision degrades to on purpose.
 func TestLookupOutsideEverythingFindsNothing(t *testing.T) {

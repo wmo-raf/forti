@@ -96,10 +96,8 @@ func openTopography(topography download.Grouped) (*lookup.Collection, map[string
 	log.Printf("default topography: %d files", len(topography[download.DefaultSet]))
 
 	topoSets := make(map[string]*lookup.Collection)
-	for name, files := range topography {
-		if name == download.DefaultSet {
-			continue
-		}
+	for _, name := range topography.Names() {
+		files := topography[name]
 		c := lookup.NewCollection()
 		if err := c.Add(files...); err != nil {
 			return nil, nil, fmt.Errorf("unable to add topography set %s: %w", name, err)
@@ -230,13 +228,28 @@ func (s *Server) lookupTopography(sets []string, latitude, longitude float64) (*
 // outage. With nothing to consult the lookup misses and the forecast degrades
 // to uncorrected, which is what is already served wherever no DEM reaches.
 //
+// One unrecognised name discards the recognised ones with it, rather than
+// being skipped over. Skipping it would leave a request for ["a", "typo"]
+// answered exactly like a request for ["a"] -- which is the "ignore unknown
+// names" option, the one rejected above, arriving by the back door. Whether
+// the caller then notices depends on whether the sets it did name happened to
+// cover the point. Refusing the whole request instead means a typo shows up
+// the same way wherever it is in the list.
+//
 // Note that this is the opposite of what an unknown *area* does, which fails
 // closed to OutsideAllGrids. The asymmetry is deliberate: a missing grid
 // means there is no forecast to give, while a missing DEM means there is one,
 // just uncorrected.
 func (s *Server) topographyFor(sets []string) []*lookup.Collection {
+	// Guarded rather than assumed: openTopography always builds a default
+	// collection, but a Server assembled field by field -- as the tests do --
+	// need not have one, and a nil Collection would panic rather than miss.
+	var byDefault []*lookup.Collection
+	if s.topo != nil {
+		byDefault = []*lookup.Collection{s.topo}
+	}
 	if len(sets) == 0 {
-		return s.defaultTopography()
+		return byDefault
 	}
 
 	collections := make([]*lookup.Collection, 0, len(sets)+1)
@@ -248,14 +261,7 @@ func (s *Server) topographyFor(sets []string) []*lookup.Collection {
 		}
 		collections = append(collections, c)
 	}
-	return append(collections, s.defaultTopography()...)
-}
-
-func (s *Server) defaultTopography() []*lookup.Collection {
-	if s.topo == nil {
-		return nil
-	}
-	return []*lookup.Collection{s.topo}
+	return append(collections, byDefault...)
 }
 
 func getAltitude(interpreted map[string]internalprotocol.InterpretedData) (*float32, bool) {
