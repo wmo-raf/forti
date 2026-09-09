@@ -1,6 +1,12 @@
 package forecast
 
-import "testing"
+import (
+	"bytes"
+	"log"
+	"os"
+	"strings"
+	"testing"
+)
 
 func statusFor(t *testing.T, f *Forecast, area string) AreaStatus {
 	t.Helper()
@@ -83,5 +89,36 @@ func TestAreaStatusFollowsTheConfiguration(t *testing.T) {
 	}
 	if f.AreaStatus()[0].Area != "group_a" {
 		t.Errorf("unexpected area: %+v", f.AreaStatus())
+	}
+}
+
+// A load failure has to name the area that failed. The message is the only
+// account of it anywhere: update returns one error for the whole round, and
+// with one process holding every area, "something did not load" is not a
+// starting point for anybody.
+func TestUpdateLogsTheAreaThatActuallyFailed(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// Started with nothing loaded, so all three areas download in the same
+	// round: the misattribution needed more than one in flight at once.
+	f, err := newFromClient(testClient(t, map[string]int{"dangling": 3}), testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.SetConfig(testConfig("group_a", "group_b", "dangling"))
+	if err := f.update(); err == nil {
+		t.Fatal("expected the dangling marker to fail its load")
+	}
+
+	if !strings.Contains(logged.String(), "unable to load dangling/3") {
+		t.Errorf("the failing area is not in the log:\n%s", logged.String())
+	}
+	for _, loaded := range []string{"unable to load group_a", "unable to load group_b"} {
+		if strings.Contains(logged.String(), loaded) {
+			t.Errorf("an area that loaded was blamed for the failure:\n%s", logged.String())
+		}
 	}
 }

@@ -230,6 +230,13 @@ func (f *Forecast) run() {
 	}
 }
 
+// loadResult is one area's outcome from a round of update.
+type loadResult struct {
+	area    string
+	version int
+	err     error
+}
+
 // update looks up new data from blob store, and loads it.
 func (f *Forecast) update() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -272,18 +279,24 @@ func (f *Forecast) update() error {
 	}
 	f.m.Unlock()
 
-	errs := make(chan error)
+	// The area and version travel back with the error. Reading them from a
+	// second walk of toAdd instead paired whichever error arrived first with
+	// whichever key that walk happened to reach first, so with more than one
+	// area downloading, a failure could be reported against an area that had
+	// loaded perfectly well while the one that had not went unnamed. Map
+	// iteration order is deliberately random, so it read as intermittent.
+	results := make(chan loadResult)
 	for area, version := range toAdd {
 		go func(area string, version int) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			errs <- f.load(ctx, cfg, area, version)
+			results <- loadResult{area: area, version: version, err: f.load(ctx, cfg, area, version)}
 		}(area, version)
 	}
 	hasLoadErrors := false
-	for area, version := range toAdd {
-		if err := <-errs; err != nil {
-			log.Printf("unable to load %s/%d: %s", area, version, err)
+	for range toAdd {
+		if result := <-results; result.err != nil {
+			log.Printf("unable to load %s/%d: %s", result.area, result.version, result.err)
 			hasLoadErrors = true
 		}
 	}
