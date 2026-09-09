@@ -239,7 +239,19 @@ func (f *Forecast) update() error {
 	cfg := f.cfg
 	toAdd := make(map[string]int)
 	for _, area := range cfg.Areas {
-		latestVersion := latest[area]
+		// A configured area with no marker has never published, which is an
+		// ordinary state: the config manager can name an area before the
+		// producer's first upload finishes. A map miss reads as version 0, so
+		// without this it was queued for load, GetMeta(area, 0) failed, and
+		// update reported "unable to load some areas" — which at startup is
+		// log.Fatalf, taking every other area in the process down with it.
+		//
+		// Only a missing marker is skipped. A marker naming a version whose
+		// data is not in the bucket is still a load failure and still errors.
+		latestVersion, published := latest[area]
+		if !published {
+			continue
+		}
 		current, ok := f.datasets[area]
 		if !ok || current.Meta.Version < latestVersion {
 			toAdd[area] = latestVersion

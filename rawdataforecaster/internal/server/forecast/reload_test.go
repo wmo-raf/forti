@@ -2,8 +2,10 @@ package forecast
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 
 	"gocloud.dev/blob"
@@ -17,22 +19,45 @@ import (
 func testForecast(t *testing.T, areas ...string) *Forecast {
 	t.Helper()
 
-	_, filename, _, _ := runtime.Caller(0)
-	testPath := filepath.Clean(filepath.Dir(filename) + "/../../../test/data")
-
-	bucket, err := blob.OpenBucket(context.Background(), "file://"+testPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	f, err := newFromClient(
-		internalformat.NewClientFromBucket(bucket),
-		testConfig(areas...),
-	)
+	f, err := newFromClient(testClient(t, nil), testConfig(areas...))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// testClient serves the checked-in fixtures, optionally with extra latest/
+// markers written over a copy of them.
+//
+// The markers are the point: a marker naming a version nobody uploaded is a
+// state the bucket really can be in, and it has to stay distinguishable from
+// an area that has simply never published. Writing it into a copy keeps a
+// deliberately broken area out of the fixture tree, which run.sh regenerates.
+func testClient(t *testing.T, markers map[string]int) internalformat.Client {
+	t.Helper()
+
+	_, filename, _, _ := runtime.Caller(0)
+	dir := filepath.Clean(filepath.Dir(filename) + "/../../../test/data")
+
+	if len(markers) > 0 {
+		copied := t.TempDir()
+		if err := os.CopyFS(copied, os.DirFS(dir)); err != nil {
+			t.Fatal(err)
+		}
+		for area, version := range markers {
+			marker := filepath.Join(copied, "latest", area)
+			if err := os.WriteFile(marker, []byte(strconv.Itoa(version)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		dir = copied
+	}
+
+	bucket, err := blob.OpenBucket(context.Background(), "file://"+dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return internalformat.NewClientFromBucket(bucket)
 }
 
 func testConfig(areas ...string) *config.Configuration {
@@ -134,5 +159,39 @@ func TestSetConfigToNoAreas(t *testing.T) {
 	}
 	if _, err := f.Get(59, 11, nil); err == nil {
 		t.Error("expected an error with no areas loaded")
+	}
+}
+
+// A configured area that has never published has no latest/ marker, and a Go
+// map miss reads as version 0. Queueing it for load made GetMeta(area, 0) fail
+// and update report "unable to load some areas" — which at startup is
+// log.Fatalf, so one name in the config took every other area down with it.
+func TestUpdateSkipsAConfiguredAreaThatHasNeverPublished(t *testing.T) {
+	f, err := newFromClient(testClient(t, nil), testConfig("group_a", "never_published"))
+	if err != nil {
+		t.Fatalf("an unpublished area failed the whole load: %s", err)
+	}
+
+	if !f.has("group_a") {
+		t.Errorf("group_a was not loaded: %v", f.loadedAreas())
+	}
+	if f.has("never_published") {
+		t.Errorf("an area with no marker was loaded: %v", f.loadedAreas())
+	}
+
+	// It stays skipped rather than being retried into an error every poll.
+	if err := f.update(); err != nil {
+		t.Errorf("a later poll errored on the unpublished area: %s", err)
+	}
+}
+
+// The skip is for a missing marker only. A marker naming a version whose data
+// is not in the bucket is a genuine failure and must still be reported, or the
+// fix would turn every load error into silence.
+func TestUpdateStillFailsWhenAMarkerNamesMissingData(t *testing.T) {
+	markers := map[string]int{"dangling": 3}
+
+	if _, err := newFromClient(testClient(t, markers), testConfig("group_a", "dangling")); err == nil {
+		t.Error("expected an error for a marker pointing at data that is not there")
 	}
 }

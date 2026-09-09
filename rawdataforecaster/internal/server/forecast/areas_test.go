@@ -108,3 +108,17 @@ func TestGetWithNoAreasLoadedKeepsItsOwnError(t *testing.T) {
 		t.Errorf("got ErrOutsideAllGrids, want the no-datasets error: %v", err)
 	}
 }
+
+// An unpublished area serves nothing, so naming it in a request has to fail
+// the same way naming an unknown one does. The alternative is answering from
+// the areas the caller excluded.
+func TestGetNamingAnUnpublishedAreaIsOutsideAllGrids(t *testing.T) {
+	f, err := newFromClient(testClient(t, nil), testConfig("group_a", "never_published"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Get(nearGroupBLat, nearGroupBLon, []string{"never_published"}); !errors.Is(err, ErrOutsideAllGrids) {
+		t.Errorf("got %v, want ErrOutsideAllGrids", err)
+	}
+}
