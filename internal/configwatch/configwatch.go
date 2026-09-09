@@ -35,8 +35,9 @@ const DefaultInterval = time.Second
 
 // DefaultStateInterval is how often a Watcher rewrites its status file to keep
 // Watcher.State fresh. Unlike the configuration, state changes without anybody
-// editing anything, so it has to be republished on a clock. Unchanged state is
-// not rewritten, so this costs one marshal and one comparison.
+// editing anything, so it has to be republished on a clock. A tick that finds
+// nothing changed costs one stat, one marshal and one comparison, and writes
+// nothing.
 const DefaultStateInterval = 15 * time.Second
 
 // Result is what a service made of a configuration file.
@@ -103,8 +104,11 @@ type Watcher struct {
 	// exactly the same status as one serving all three. Only the service can
 	// tell them apart, and without this the difference reaches nobody.
 	//
-	// It is called on the Watcher's goroutine while no lock of this package's
-	// is held, and must be safe to call at any time.
+	// It is called whenever the status file is written — from Run's
+	// goroutine on a tick or a configuration change, and from whichever
+	// goroutine called Load — while no lock of this package's is held. It
+	// must be safe to call at any time, and must not call back into the
+	// Watcher.
 	State func() any
 
 	// StateInterval is how often the status file is rewritten so State stays
@@ -189,8 +193,11 @@ func (w *Watcher) Run(ctx context.Context) {
 // the last configuration attempt reported as it was. A service whose state has
 // not moved writes nothing, so an idle process leaves the file's modification
 // time alone and whatever mirrors it up has nothing to do.
+//
+// It runs for a service that publishes no state too, for the repair below: a
+// status file is worth putting back whether or not anything in it moves.
 func (w *Watcher) refreshState() {
-	if w.State == nil || w.StatusDir == "" {
+	if w.StatusDir == "" {
 		return
 	}
 
@@ -198,11 +205,16 @@ func (w *Watcher) refreshState() {
 	// directory — is put back. Without this the write-only-on-change rule
 	// would keep it missing until somebody edited the configuration, which is
 	// the same silently-stale failure this whole file exists to report.
-	if _, err := os.Stat(filepath.Join(w.StatusDir, w.Module+".json")); err != nil {
+	if _, err := os.Stat(w.statusPath()); err != nil {
 		w.lastWritten = nil
 	}
 
 	w.report(w.last)
+}
+
+// statusPath is where this service's status file goes.
+func (w *Watcher) statusPath() string {
+	return filepath.Join(w.StatusDir, w.Module+".json")
 }
 
 // readIfChanged returns the file contents, and whether they differ from what
@@ -297,7 +309,7 @@ func (w *Watcher) report(status Status) {
 	if bytes.Equal(data, w.lastWritten) {
 		return
 	}
-	if err := writeFile(filepath.Join(w.StatusDir, w.Module+".json"), data); err != nil {
+	if err := writeFile(w.statusPath(), data); err != nil {
 		log.Printf("unable to write status file: %s", err)
 		return
 	}

@@ -77,6 +77,19 @@ func readStatus(t *testing.T, statusDir string) Status {
 	return status
 }
 
+func readRawStatus(t *testing.T, statusDir string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(statusDir, "test.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // waitFor polls until condition holds, so tests do not depend on how long a
 // tick takes.
 func waitFor(t *testing.T, what string, condition func() bool) {
@@ -375,19 +388,6 @@ func TestNilStateIsOmitted(t *testing.T) {
 	}
 }
 
-func readRawStatus(t *testing.T, statusDir string) map[string]any {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(statusDir, "test.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
 // Writing only on change must not mean never writing again. A status file
 // removed underneath the process — a recreated volume, a tidied directory —
 // comes back on the next tick, rather than staying missing until somebody
@@ -396,6 +396,21 @@ func TestAMissingStatusFileIsWrittenAgain(t *testing.T) {
 	a := &applied{}
 	watcher, _, statusDir := newWatcher(t, `first`, a)
 	watcher.State = func() any { return map[string]any{"loaded": "group_a"} }
+
+	assertStatusFileIsRestored(t, watcher, statusDir)
+}
+
+// The repair is not about state. A service that publishes none still has a
+// status file worth putting back.
+func TestAMissingStatusFileIsWrittenAgainWithoutState(t *testing.T) {
+	a := &applied{}
+	watcher, _, statusDir := newWatcher(t, `first`, a)
+
+	assertStatusFileIsRestored(t, watcher, statusDir)
+}
+
+func assertStatusFileIsRestored(t *testing.T, watcher *Watcher, statusDir string) {
+	t.Helper()
 
 	if err := watcher.Load(); err != nil {
 		t.Fatal(err)
