@@ -14,6 +14,20 @@ message GetForecastRequest {
   float latitude = 1;
   float longitude = 2;
   Altitude altitude = 3;
+
+  // Which of the loaded areas may answer. Empty means all of them, which is
+  // what a client that does not set the field sends, so this narrows an
+  // existing answer and never widens one. A name that is not loaded matches
+  // nothing, and a request that matches nothing is outside all the grids it
+  // asked for.
+  repeated string areas = 4;
+
+  // Which topography sets to consult for the real ground elevation, in the
+  // order to consult them, before the default set. Empty means the default
+  // set alone. A name that does not exist yields no topography at all, and
+  // so an uncorrected forecast -- not the default set, which the caller did
+  // not ask for and could not detect.
+  repeated string topography = 5;
 }
 
 message Altitude {
@@ -41,6 +55,11 @@ message ForecastMeta {
   google.protobuf.Timestamp nextUpdate = 2;
 
   Location GridLocation = 3;
+
+  // The area that answered. Without it a caller can constrain a query but
+  // cannot check that the constraint held, and can only infer the area from
+  // GridLocation's coordinates.
+  string area = 4;
 }
 
 message Location {

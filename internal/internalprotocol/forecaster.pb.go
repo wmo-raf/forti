@@ -72,10 +72,22 @@ func (ForecastStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type GetForecastRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Latitude      float32                `protobuf:"fixed32,1,opt,name=latitude,proto3" json:"latitude,omitempty"`
-	Longitude     float32                `protobuf:"fixed32,2,opt,name=longitude,proto3" json:"longitude,omitempty"`
-	Altitude      *Altitude              `protobuf:"bytes,3,opt,name=altitude,proto3" json:"altitude,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Latitude  float32                `protobuf:"fixed32,1,opt,name=latitude,proto3" json:"latitude,omitempty"`
+	Longitude float32                `protobuf:"fixed32,2,opt,name=longitude,proto3" json:"longitude,omitempty"`
+	Altitude  *Altitude              `protobuf:"bytes,3,opt,name=altitude,proto3" json:"altitude,omitempty"`
+	// Which of the loaded areas may answer. Empty means all of them, which is
+	// what a client that does not set the field sends, so this narrows an
+	// existing answer and never widens one. A name that is not loaded matches
+	// nothing, and a request that matches nothing is outside all the grids it
+	// asked for.
+	Areas []string `protobuf:"bytes,4,rep,name=areas,proto3" json:"areas,omitempty"`
+	// Which topography sets to consult for the real ground elevation, in the
+	// order to consult them, before the default set. Empty means the default
+	// set alone. A name that does not exist yields no topography at all, and
+	// so an uncorrected forecast -- not the default set, which the caller did
+	// not ask for and could not detect.
+	Topography    []string `protobuf:"bytes,5,rep,name=topography,proto3" json:"topography,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -127,6 +139,20 @@ func (x *GetForecastRequest) GetLongitude() float32 {
 func (x *GetForecastRequest) GetAltitude() *Altitude {
 	if x != nil {
 		return x.Altitude
+	}
+	return nil
+}
+
+func (x *GetForecastRequest) GetAreas() []string {
+	if x != nil {
+		return x.Areas
+	}
+	return nil
+}
+
+func (x *GetForecastRequest) GetTopography() []string {
+	if x != nil {
+		return x.Topography
 	}
 	return nil
 }
@@ -252,10 +278,14 @@ func (x *Forecast) GetData() []float32 {
 }
 
 type ForecastMeta struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=updatedAt,proto3" json:"updatedAt,omitempty"`
-	NextUpdate    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=nextUpdate,proto3" json:"nextUpdate,omitempty"`
-	GridLocation  *Location              `protobuf:"bytes,3,opt,name=GridLocation,proto3" json:"GridLocation,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=updatedAt,proto3" json:"updatedAt,omitempty"`
+	NextUpdate   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=nextUpdate,proto3" json:"nextUpdate,omitempty"`
+	GridLocation *Location              `protobuf:"bytes,3,opt,name=GridLocation,proto3" json:"GridLocation,omitempty"`
+	// The area that answered. Without it a caller can constrain a query but
+	// cannot check that the constraint held, and can only infer the area from
+	// GridLocation's coordinates.
+	Area          string `protobuf:"bytes,4,opt,name=area,proto3" json:"area,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -309,6 +339,13 @@ func (x *ForecastMeta) GetGridLocation() *Location {
 		return x.GridLocation
 	}
 	return nil
+}
+
+func (x *ForecastMeta) GetArea() string {
+	if x != nil {
+		return x.Area
+	}
+	return ""
 }
 
 type Location struct {
@@ -435,11 +472,15 @@ var File_forecaster_proto protoreflect.FileDescriptor
 
 const file_forecaster_proto_rawDesc = "" +
 	"\n" +
-	"\x10forecaster.proto\x12\x10internalprotocol\x1a\x1fgoogle/protobuf/timestamp.proto\"\x86\x01\n" +
+	"\x10forecaster.proto\x12\x10internalprotocol\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbc\x01\n" +
 	"\x12GetForecastRequest\x12\x1a\n" +
 	"\blatitude\x18\x01 \x01(\x02R\blatitude\x12\x1c\n" +
 	"\tlongitude\x18\x02 \x01(\x02R\tlongitude\x126\n" +
-	"\baltitude\x18\x03 \x01(\v2\x1a.internalprotocol.AltitudeR\baltitude\"<\n" +
+	"\baltitude\x18\x03 \x01(\v2\x1a.internalprotocol.AltitudeR\baltitude\x12\x14\n" +
+	"\x05areas\x18\x04 \x03(\tR\x05areas\x12\x1e\n" +
+	"\n" +
+	"topography\x18\x05 \x03(\tR\n" +
+	"topography\"<\n" +
 	"\bAltitude\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\x02R\x05value\x12\x1a\n" +
 	"\boverride\x18\x02 \x01(\bR\boverride\"\xf3\x01\n" +
@@ -447,13 +488,14 @@ const file_forecaster_proto_rawDesc = "" +
 	"\x0eforecastStatus\x18\x01 \x01(\x0e2 .internalprotocol.ForecastStatusR\x0eforecastStatus\x12B\n" +
 	"\fforecastMeta\x18\x02 \x01(\v2\x1e.internalprotocol.ForecastMetaR\fforecastMeta\x12E\n" +
 	"\rparameterMeta\x18\x03 \x03(\v2\x1f.internalprotocol.ParameterMetaR\rparameterMeta\x12\x12\n" +
-	"\x04data\x18\x04 \x03(\x02R\x04data\"\xc4\x01\n" +
+	"\x04data\x18\x04 \x03(\x02R\x04data\"\xd8\x01\n" +
 	"\fForecastMeta\x128\n" +
 	"\tupdatedAt\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12:\n" +
 	"\n" +
 	"nextUpdate\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"nextUpdate\x12>\n" +
-	"\fGridLocation\x18\x03 \x01(\v2\x1a.internalprotocol.LocationR\fGridLocation\"D\n" +
+	"\fGridLocation\x18\x03 \x01(\v2\x1a.internalprotocol.LocationR\fGridLocation\x12\x12\n" +
+	"\x04area\x18\x04 \x01(\tR\x04area\"D\n" +
 	"\bLocation\x12\x1a\n" +
 	"\blatitude\x18\x01 \x01(\x02R\blatitude\x12\x1c\n" +
 	"\tlongitude\x18\x02 \x01(\x02R\tlongitude\"\x93\x01\n" +
