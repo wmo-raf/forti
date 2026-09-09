@@ -82,7 +82,7 @@ func TestSetConfigDropsRemovedAreas(t *testing.T) {
 	}
 
 	// The one that remains still answers.
-	if _, err := f.Get(59, 11); err != nil {
+	if _, err := f.Get(59, 11, nil); err != nil {
 		t.Errorf("forecast stopped working after a reload: %s", err)
 	}
 }
@@ -132,7 +132,7 @@ func TestSetConfigToNoAreas(t *testing.T) {
 	if len(f.loadedAreas()) != 0 {
 		t.Errorf("expected nothing loaded, got %v", f.loadedAreas())
 	}
-	if _, err := f.Get(59, 11); err == nil {
+	if _, err := f.Get(59, 11, nil); err == nil {
 		t.Error("expected an error with no areas loaded")
 	}
 }

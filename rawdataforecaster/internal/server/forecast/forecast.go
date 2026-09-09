@@ -69,11 +69,20 @@ var ErrPointTooFarAway = errors.New("returned point is too far away")
 // Get returns a forecast for the given latitude and longitude. Returns
 // ErrOutsideAllGrids if outside all grids, or ErrPointTooFarAway if grid
 // point is too far away.
-func (f *Forecast) Get(latitude, longitude float32) (*dataset.LocationData, error) {
+//
+// areas narrows the search to the named areas. An empty areas is the whole
+// loaded set, which is what a request that does not ask for one carries, so
+// the filter can only ever narrow an answer and never widen one.
+//
+// It comes from the request rather than from the configuration on purpose:
+// the configuration says which areas the process holds, and can be replaced
+// under the lock at any moment, while this says which of them one caller will
+// accept. Reading it here keeps the filter out of the reload path entirely.
+func (f *Forecast) Get(latitude, longitude float32, areas []string) (*dataset.LocationData, error) {
 	f.m.RLock()
 	defer f.m.RUnlock()
 
-	best, err := f.bestArea(latitude, longitude)
+	best, err := f.bestArea(latitude, longitude, areas)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +103,13 @@ type bestDataset struct {
 	GridLocation dataset.Location
 }
 
-func (f *Forecast) bestArea(latitude, longitude float32) (*bestDataset, error) {
+func (f *Forecast) bestArea(latitude, longitude float32, areas []string) (*bestDataset, error) {
 	var selected *dataset.Dataset
 	var selectedLocation *lookup.GeoResponse
-	for _, area := range f.datasets {
+	for name, area := range f.datasets {
+		if !selects(areas, name) {
+			continue
+		}
 		closestLocation, err := area.ClosestGridLocation(latitude, longitude)
 		if err != nil {
 			return nil, err
@@ -109,6 +121,16 @@ func (f *Forecast) bestArea(latitude, longitude float32) (*bestDataset, error) {
 	}
 
 	if selected == nil {
+		if len(areas) > 0 {
+			// Every name the caller gave is unloaded, or was dropped from the
+			// configuration since. Answering from the areas it excluded would
+			// make a typo silently widen the query, which is the whole failure
+			// this filter exists to prevent, so this fails closed instead: a
+			// request that matches nothing is outside all the grids it asked
+			// for. That is a path callers already handle, and it needs no new
+			// status value on the wire.
+			return nil, ErrOutsideAllGrids
+		}
 		return nil, errors.New("no datasets available")
 	}
 	if !selected.WithinGeographicArea(latitude, longitude) {
@@ -122,6 +144,15 @@ func (f *Forecast) bestArea(latitude, longitude float32) (*bestDataset, error) {
 
 	return &bestDataset{selected,
 		dataset.Location{Lat: selectedLocation.Lat, Long: selectedLocation.Long}}, nil
+}
+
+// selects reports whether an area may answer a request narrowed to filter.
+//
+// An empty filter selects everything. proto3 decodes an absent repeated field
+// to a nil slice, so that case is exactly a request that did not ask to be
+// narrowed, and needs no sentinel to tell the two apart.
+func selects(filter []string, area string) bool {
+	return len(filter) == 0 || slices.Contains(filter, area)
 }
 
 // SetConfig puts a new configuration into use.

@@ -52,7 +52,7 @@ type forecastServer struct {
 
 func (s *forecastServer) GetForecast(ctx context.Context, in *internalprotocol.GetForecastRequest) (*internalprotocol.Forecast, error) {
 
-	locationData, err := s.forecast.Get(in.Latitude, in.Longitude)
+	locationData, err := s.forecast.Get(in.Latitude, in.Longitude, in.Areas)
 	if err != nil {
 		if errors.Is(err, forecast.ErrOutsideAllGrids) {
 			return &internalprotocol.Forecast{
@@ -116,6 +116,11 @@ func (s *forecastServer) GetForecast(ctx context.Context, in *internalprotocol.G
 			UpdatedAt:    timestamppb.New(locationData.Meta.UpdatedAt),
 			NextUpdate:   timestamppb.New(locationData.Meta.NextUpdate),
 			GridLocation: &gridLocation,
+			// Which area answered, so a caller can check that the areas it
+			// asked for are the areas it got. Only set here: the two failure
+			// responses above never reached a dataset, and saying nothing
+			// answered is the honest thing for them to report.
+			Area: locationData.Meta.Area,
 		},
 		ParameterMeta: parameterMeta,
 		Data:          values,

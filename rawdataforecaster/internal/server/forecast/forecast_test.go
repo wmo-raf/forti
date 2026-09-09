@@ -40,7 +40,7 @@ func Test(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pointdata, err := forecast.Get(59, 11)
+	pointdata, err := forecast.Get(59, 11, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
