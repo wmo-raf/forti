@@ -159,23 +159,20 @@ func getForecastRequest(cfg *config.Elements, r *http.Request) (*internalprotoco
 		return nil, err
 	}
 
+	areas, err := getSelection(q, "area")
+	if err != nil {
+		return nil, err
+	}
+	topography, err := getSelection(q, "topography")
+	if err != nil {
+		return nil, err
+	}
+
 	location := internalprotocol.GetForecastRequest{
-		Latitude:  latitude,
-		Longitude: longitude,
-		// Both repeat and both keep their order, and both are forwarded
-		// verbatim: which areas exist and which topography sets exist are
-		// facts about the upstream, not about this process, so validating
-		// them here would only duplicate a check that has to happen there
-		// anyway and would go stale on the next reload.
-		//
-		// Absent means absent. q["area"] is nil when the parameter was not
-		// given, which is the empty filter the upstream reads as "no
-		// narrowing" -- and "?area=" is one name that happens to be empty,
-		// which matches nothing. The distinction is the point: a filter that
-		// silently widened on a mistyped name would be worse than no filter,
-		// because it would look like it was working.
-		Areas:      q["area"],
-		Topography: q["topography"],
+		Latitude:   latitude,
+		Longitude:  longitude,
+		Areas:      areas,
+		Topography: topography,
 	}
 
 	if !cfg.SkipAltitude {
@@ -192,6 +189,34 @@ func getForecastRequest(cfg *config.Elements, r *http.Request) (*internalprotoco
 	}
 
 	return &location, nil
+}
+
+// getSelection reads a repeatable selection parameter, keeping the order it
+// was given in.
+//
+// Names are forwarded without being checked against anything: which areas and
+// which topography sets exist are facts about the upstream, not about this
+// process, so checking here would duplicate a check that has to happen there
+// anyway and would go stale on the next reload.
+//
+// An empty value is the one exception, and it is rejected rather than either
+// dropped or forwarded. Dropping it would let "?area=" -- an unset variable in
+// a caller's template -- widen the query back to every loaded area, silently,
+// which is the failure the parameter exists to prevent. Forwarding it reaches
+// the upstream as a name that matches nothing, and comes back to the caller as
+// "Outside of coverage area": a 404 blaming coordinates that may be perfectly
+// well covered. A 400 naming the parameter points at the actual mistake.
+//
+// An absent parameter stays absent: q[name] is nil, which the upstream reads
+// as no narrowing at all.
+func getSelection(q url.Values, name string) ([]string, error) {
+	values := q[name]
+	for _, value := range values {
+		if value == "" {
+			return nil, errors.New("Empty value for " + name)
+		}
+	}
+	return values, nil
 }
 
 func getParam(q url.Values, name string, from float32, to float32) (float32, error) {

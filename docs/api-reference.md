@@ -15,8 +15,8 @@ Returns a point forecast for the specified location.
 | `lat` | float | Yes | -90 to 90 | Latitude in decimal degrees |
 | `lon` | float | Yes | -180 to 180 | Longitude in decimal degrees |
 | `altitude` | float | No | -500 to 9000 | Ground surface height above sea level in meters. When omitted, the internal topography model is used for temperature correction. |
-| `area` | string | No | | Name of a model area that may answer. Repeatable. When omitted, the nearest gridpoint across every loaded area answers. |
-| `topography` | string | No | | Name of a topography set to consult for ground elevation. Repeatable, and consulted in the order given. When omitted, the default set is used. |
+| `area` | string | No | non-empty | Name of a model area that may answer. Repeatable. When omitted, the nearest gridpoint across every loaded area answers. |
+| `topography` | string | No | non-empty | Name of a topography set to consult for ground elevation. Repeatable, and consulted in the order given. When omitted, the default set is used. |
 
 **Example Request:**
 
@@ -248,6 +248,15 @@ Missing value for lat
 ```json
 lat must be in range -90 to 90
 ```
+
+```json
+Empty value for area
+```
+
+An empty `area` or `topography` value is a mistake in the request rather than a
+name, and is rejected here rather than being dropped or passed on. Dropping it
+would let `?area=` — an unset variable in a caller's template — widen the query
+back to every loaded area with no sign anything was wrong.
 
 ### 404 Not Found
 
