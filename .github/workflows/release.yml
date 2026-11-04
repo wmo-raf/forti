@@ -31,12 +31,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
-          # `v`-prefixed, as deploy/compose.yml names them. A pre-release such
-          # as v0.8.1-wmo.1 gets only the full version: metadata-action does
-          # not emit the floating major / major.minor tags for one, so a
-          # revision of the fork never moves `v0` or `v0.8`.
+          # The git tag, exactly as pushed: v0.8.1-wmo.1 stays v0.8.1-wmo.1.
+          # This is the name deploy/compose.yml pulls. `type=semver` cannot
+          # do it: {{version}} strips the leading `v`, and a literal `v` in the
+          # pattern is not kept (the first run published `0.8.1-wmo.1`). No
+          # floating major / major.minor tags either — a revision of the fork
+          # must never move `v0` or `v0.8`.
           tags: |
-            type=semver,pattern=v{{version}}
+            type=ref,event=tag
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
