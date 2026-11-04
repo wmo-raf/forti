@@ -90,6 +90,25 @@ func readRawStatus(t *testing.T, statusDir string) map[string]any {
 	return raw
 }
 
+// runInBackground starts watcher.Run and, when the test ends, stops it and
+// waits for it to return. Without the wait, Run can still be writing the status
+// file while t.TempDir's cleanup removes the directory, which fails the test
+// with "directory not empty" - often, on a slow or emulated CPU. Cleanups run
+// last-in first-out, so this one fires before the temp directories are removed.
+func runInBackground(t *testing.T, watcher *Watcher) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watcher.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
 // waitFor polls until condition holds, so tests do not depend on how long a
 // tick takes.
 func waitFor(t *testing.T, what string, condition func() bool) {
@@ -153,9 +172,7 @@ func TestRunAppliesChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go watcher.Run(ctx)
+	runInBackground(t, watcher)
 
 	write(t, path, `second`)
 	waitFor(t, "the change to be applied", func() bool {
@@ -173,9 +190,7 @@ func TestRunIgnoresIdenticalContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go watcher.Run(ctx)
+	runInBackground(t, watcher)
 
 	write(t, path, `same`)
 	time.Sleep(60 * time.Millisecond)
@@ -194,9 +209,7 @@ func TestRunKeepsServingAfterARejectedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go watcher.Run(ctx)
+	runInBackground(t, watcher)
 
 	write(t, path, `bad`)
 	waitFor(t, "the rejection to be reported", func() bool {
@@ -327,9 +340,7 @@ func TestStateIsRepublishedWithoutAConfigChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go watcher.Run(ctx)
+	runInBackground(t, watcher)
 
 	mutex.Lock()
 	loaded = "group_a"
