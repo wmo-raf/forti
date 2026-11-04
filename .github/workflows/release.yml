@@ -4,20 +4,25 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+      # The WMO RAF fork's own releases, e.g. v0.8.1-wmo.1: upstream's version
+      # plus the revision of this fork's changes on top of it.
+      - 'v[0-9]+.[0-9]+.[0-9]+-wmo.[0-9]+'
 
 jobs:
   release:
     name: Release ${{ matrix.service }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         service:
-          - correctedforecaster
-          - healthz
+          # Only the services GeoRiva deploys (georiva-publisher-forti,
+          # deploy/compose.yml). The rest build from the same tree and can be
+          # added back here when something needs them.
           - jsonfrontend
-          - moxfrontend
           - rawdataforecaster
-          - xmlfrontend
     steps:
       - uses: actions/checkout@v4
 
@@ -25,20 +30,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            fortiregistry.azurecr.io/${{ matrix.service }}
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}
+          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
+          # `v`-prefixed, as deploy/compose.yml names them. A pre-release such
+          # as v0.8.1-wmo.1 gets only the full version: metadata-action does
+          # not emit the floating major / major.minor tags for one, so a
+          # revision of the fork never moves `v0` or `v0.8`.
           tags: |
-            type=semver,pattern=v{{major}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
-
-      - name: Login to ACR
-        uses: docker/login-action@v4
-        with:
-          registry: fortiregistry.azurecr.io
-          username: ${{ secrets.AZURE_REGISTRY_USERNAME }}
-          password: ${{ secrets.AZURE_REGISTRY_PASSWORD }}
+            type=semver,pattern=v{{version}}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
